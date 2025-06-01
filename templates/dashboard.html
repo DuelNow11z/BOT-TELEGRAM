@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Moderno</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f8f9fc url('https://www.transparenttextures.com/patterns/symphony.png');
+      --text: #343a40;
+      --card-bg: #ffffff;
+      --accent: #4e73df;
+      --gradient: linear-gradient(to right, #4e73df, #224abe);
+    }
+    body.dark-mode {
+      --bg: #1a1d24 url('https://www.transparenttextures.com/patterns/symphony.png');
+      --text: #ffffff;
+      --card-bg: #2b2f3e;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      transition: background 0.3s, color 0.3s;
+    }
+    .sidebar {
+      height: 100vh;
+      background-color: var(--card-bg);
+      border-right: 1px solid #ddd;
+      padding: 1rem;
+      box-shadow: 2px 0 6px rgba(0, 0, 0, 0.05);
+      border-radius: 0 12px 12px 0;
+      color: var(--text);
+    }
+    .sidebar h5 {
+      color: var(--accent);
+    }
+    .sidebar a {
+      display: block;
+      color: var(--text);
+      margin: 10px 0;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+    }
+    .sidebar a:hover {
+      background-color: rgba(78, 115, 223, 0.1);
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem;
+      background-color: var(--card-bg);
+      border-bottom: 1px solid #ddd;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      transition: all 0.3s ease;
+      color: var(--text);
+    }
+    .card {
+      background-color: var(--card-bg);
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      color: var(--text);
+    }
+    .card-metric {
+      border-left: 5px solid var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="d-flex">
+    <div class="sidebar col-md-2">
+      <h5>29Admin</h5>
+      <a href="#"><i class="fas fa-chart-line"></i> Dashboard</a>
+      <a href="#"><i class="fas fa-box"></i> Produtos</a>
+      <a href="#"><i class="fas fa-receipt"></i> Pedidos</a>
+      <a href="#"><i class="fas fa-cog"></i> Configurações</a>
+    </div>
+    <div class="col-md-10">
+      <div class="topbar">
+        <h4>Dashboard</h4>
+        <button onclick="toggleDark()" id="themeToggle" class="btn btn-outline-secondary btn-sm"><i class="fas fa-moon"></i> Tema</button>
+      </div>
+
+      <div class="container py-4">
+        <div class="row g-3">
+          <div class="col-md-3"><div class="card p-3 text-center card-metric"><h6>Pedidos Pendentes</h6><h2>45</h2></div></div>
+          <div class="col-md-3"><div class="card p-3 text-center card-metric"><h6>Concluídos</h6><h2>79</h2></div></div>
+          <div class="col-md-3"><div class="card p-3 text-center card-metric"><h6>Cancelados</h6><h2>3</h2></div></div>
+          <div class="col-md-3"><div class="card p-3 text-center card-metric"><h6>Hoje</h6><h2>12</h2></div></div>
+        </div>
+
+        <div class="card mt-4 p-3">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0">Tendência de Vendas</h6>
+            <select id="periodSelector" class="form-select form-select-sm w-auto">
+              <option value="week" selected>Semana</option>
+              <option value="month">Mês</option>
+            </select>
+          </div>
+          <div style="overflow-x: auto;">
+            <canvas id="salesChart" height="100"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleDark() {
+      const isDark = document.body.classList.toggle("dark-mode");
+      localStorage.setItem("theme", isDark ? "dark" : "light");
+      const icon = document.getElementById("themeToggle");
+      if (icon) {
+        icon.innerHTML = isDark ? '<i class="fas fa-sun"></i> Tema' : '<i class="fas fa-moon"></i> Tema';
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+      if (localStorage.getItem("theme") === "dark") {
+        document.body.classList.add("dark-mode");
+        const icon = document.getElementById("themeToggle");
+        if (icon) {
+          icon.innerHTML = '<i class="fas fa-sun"></i> Tema';
+        }
+      }
+    });
+
+    const ctx = document.getElementById('salesChart');
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'],
+        datasets: [
+          {
+            label: 'Semana Atual',
+            data: [12, 19, 3, 5, 2, 3, 7],
+            borderColor: '#4e73df',
+            backgroundColor: 'rgba(78, 115, 223, 0.1)',
+            tension: 0.4,
+            pointBackgroundColor: '#4e73df',
+            pointRadius: 5,
+            pointHoverRadius: 7,
+            pointBorderColor: '#fff',
+            pointHoverBackgroundColor: '#224abe'
+          },
+          {
+            label: 'Semana Anterior',
+            data: [10, 14, 4, 8, 3, 5, 4],
+            borderColor: '#1cc88a',
+            backgroundColor: 'rgba(28, 200, 138, 0.1)',
+            tension: 0.4,
+            pointBackgroundColor: '#1cc88a',
+            pointRadius: 5,
+            pointHoverRadius: 7,
+            pointBorderColor: '#fff',
+            pointHoverBackgroundColor: '#17a673'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#4e73df',
+            titleColor: '#ffffff',
+            bodyColor: '#ffffff',
+            padding: 10,
+            cornerRadius: 4
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { color: 'var(--text)' }
+          },
+          x: {
+            ticks: { color: 'var(--text)' }
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
