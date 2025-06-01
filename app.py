@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, session, url_for
 import sqlite3
 from datetime import datetime
+from werkzeug.security import check_password_hash
 
 app = Flask(__name__)
 app.secret_key = 'supersecret'
@@ -26,8 +27,13 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        if request.form['username'] == 'admin' and request.form['password'] == 'admin':
-            session['user'] = request.form['username']
+        username = request.form['username']
+        senha = request.form['password']
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM usuarios WHERE username = ?', (username,)).fetchone()
+        conn.close()
+        if user and check_password_hash(user['senha'], senha):
+            session['user'] = username
             return redirect(url_for('index'))
         return render_template('login.html', error='Usuário ou senha incorretos.')
     return render_template('login.html')
@@ -62,16 +68,23 @@ def deletar_produto(id):
 
 if __name__ == '__main__':
     conn = get_db_connection()
-    conn.execute("""CREATE TABLE IF NOT EXISTS produtos (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        nome TEXT,
-                        preco REAL,
-                        link_entrega TEXT)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS pedidos (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        produto TEXT,
-                        status TEXT,
-                        comprador TEXT,
-                        data TEXT)""")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS produtos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT,
+        preco REAL,
+        link_entrega TEXT)""")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS pedidos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        produto TEXT,
+        status TEXT,
+        comprador TEXT,
+        data TEXT)""")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        senha TEXT NOT NULL)""")
     conn.close()
     app.run(debug=True)
