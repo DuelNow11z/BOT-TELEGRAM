@@ -1,8 +1,3 @@
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-MERCADO_PAGO_TOKEN = os.environ.get('MERCADO_PAGO_TOKEN')
-LINK_ENTREGA = os.environ.get('LINK_ENTREGA', 'https://pt.wikipedia.org/wiki/Wikip%C3%A9dia:P%C3%A1gina_principal')
+TELEGRAM_TOKEN = '7740971962:AAGLCCpb4LCG459mC_OM8oRfFeL98udcED0'
+LINK_ENTREGA = 'https://pt.wikipedia.org/wiki/Wikip%C3%A9dia:P%C3%A1gina_principal'
+MERCADO_PAGO_TOKEN = 'APP_USR-7122152449080983-053011-8076ffe0cb04d3e653b6bfdba0c641d1-216350613'

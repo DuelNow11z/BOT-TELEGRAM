@@ -23,3 +23,20 @@ def gerar_link_pagamento(nome_produto, preco):
 
     preference_response = sdk.preference().create(preference_data)
     return preference_response["response"].get("init_point", "#ERRO")
+
+
+def verificar_pagamento_por_preference_id(preference_id):
+    search_result = sdk.payment().search({
+        "external_reference": preference_id,
+        "sort": "date_created",
+        "criteria": "desc"
+    })
+
+    payments = search_result.get("response", {}).get("results", [])
+    if not payments:
+        return None
+
+    for pagamento in payments:
+        if pagamento["status"] == "approved":
+            return pagamento
+    return None
