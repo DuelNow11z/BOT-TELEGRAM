@@ -2,8 +2,9 @@ import telebot
 from telebot import types
 import sqlite3
 from datetime import datetime
-import pagamentos # Importa nosso módulo de pagamentos atualizado
-import config # Importa as configurações
+import pagamentos 
+import config 
+import base64
 
 # Inicialização do bot com o token do arquivo de configuração
 bot = telebot.TeleBot(config.API_TOKEN)
@@ -78,7 +79,6 @@ def gerar_cobranca(message, produto_id):
         conn.close()
         return
         
-    # 1. Cria uma entrada na tabela de vendas com status 'pendente'
     data_venda = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor = conn.cursor()
     cursor.execute(
@@ -86,31 +86,30 @@ def gerar_cobranca(message, produto_id):
         (user_id, produto_id, 'pendente', data_venda)
     )
     conn.commit()
-    venda_id = cursor.lastrowid # Pega o ID da venda que acabamos de criar
+    venda_id = cursor.lastrowid 
     
-    # 2. Gera o pagamento no Mercado Pago usando o ID da venda como referência
     pagamento = pagamentos.criar_pagamento_pix(
         valor=produto['preco'],
         descricao=produto['nome'],
-        email=f"user_{user_id}@email.com", # Pode ser um email genérico
+        email=f"user_{user_id}@email.com", 
         venda_id=venda_id 
     )
     conn.close()
-
-    if pagamento:
+    
+    # Verifica se o pagamento foi criado com sucesso antes de prosseguir
+    if pagamento and 'point_of_interaction' in pagamento:
         qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
         qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
         
-        # Decodifica a imagem do QR Code
-        import base64
         qr_code_image = base64.b64decode(qr_code_base64)
 
-        # Envia a imagem do QR Code e o código PIX Copia e Cola
         bot.send_photo(user_id, qr_code_image, caption=f"✅ PIX gerado para *{produto['nome']}*!\n\nEscaneie o QR Code ou use o código abaixo:")
         bot.send_message(user_id, f"```{qr_code_data}```", parse_mode='Markdown')
         bot.send_message(user_id, "Assim que o pagamento for confirmado, você receberá o produto automaticamente aqui. 😊")
     else:
-        bot.send_message(user_id, "Desculpe, ocorreu um erro ao gerar o PIX. Tente novamente mais tarde.")
+        # Mensagem de erro para o usuário e log do erro para o admin (no console)
+        bot.send_message(user_id, "Desculpe, ocorreu um erro ao gerar o PIX. Tente novamente mais tarde ou contate o suporte.")
+        print(f"[ERRO] Falha ao gerar PIX. Resposta do MP: {pagamento}")
 
 
 print("Bot em execução...")
