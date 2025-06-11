@@ -15,7 +15,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row 
     return conn
 
-# --- ROTA DE WEBHOOK ---
+# --- ROTA DE WEBHOOK (sem alterações) ---
 @app.route('/webhook/mercado-pago', methods=['POST'])
 def webhook_mercado_pago():
     notification = request.json
@@ -33,8 +33,6 @@ def webhook_mercado_pago():
             venda = cursor.execute('SELECT * FROM vendas WHERE id = ? AND status = ?', (venda_id, 'pendente')).fetchone()
 
             if venda:
-                # ---- CORREÇÃO SQL INJECTION APLICADA ----
-                # Usando '?' para atualizar o banco de dados de forma segura.
                 cursor.execute('UPDATE vendas SET status = ?, payment_id = ? WHERE id = ?', ('aprovado', payment_id, venda_id))
                 conn.commit()
 
@@ -54,22 +52,17 @@ def webhook_mercado_pago():
     return jsonify({'status': 'ignored'}), 200
 
 def enviar_produto_telegram(user_id, nome_produto, link_produto):
-    """Usa a API do Telegram diretamente para enviar a mensagem com o produto."""
     url = f"https://api.telegram.org/bot{config.API_TOKEN}/sendMessage"
-    texto = (
-        f"🎉 Pagamento Aprovado!\n\n"
-        f"Obrigado por comprar *{nome_produto}*.\n\n"
-        f"Aqui está o seu link de acesso:\n"
-        f"{link_produto}"
-    )
+    texto = (f"🎉 Pagamento Aprovado!\n\n"
+             f"Obrigado por comprar *{nome_produto}*.\n\n"
+             f"Aqui está o seu link de acesso:\n{link_produto}")
     payload = { 'chat_id': user_id, 'text': texto, 'parse_mode': 'Markdown' }
     try:
         requests.post(url, json=payload)
     except requests.exceptions.RequestException as e:
         print(f"Erro ao enviar mensagem de entrega para o usuário {user_id}: {e}")
 
-
-# --- ROTAS DO PAINEL DE CONTROLE (SEGURAS) ---
+# --- ROTAS DE AUTENTICAÇÃO E DASHBOARD (ATUALIZADAS) ---
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -96,49 +89,100 @@ def logout():
 def index():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    users = conn.execute('SELECT * FROM users').fetchall()
-    produtos = conn.execute('SELECT * FROM produtos').fetchall()
-    vendas = conn.execute('SELECT v.id, u.username, p.nome, v.status, v.data_venda FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id ORDER BY v.id DESC').fetchall()
-    conn.close()
-    return render_template('index.html', users=users, produtos=produtos, vendas=vendas, total_vendas=len(vendas), total_usuarios=len(users), total_produtos=len(produtos))
+    total_usuarios = conn.execute('SELECT COUNT(id) FROM users').fetchone()[0]
+    total_produtos = conn.execute('SELECT COUNT(id) FROM produtos').fetchone()[0]
+    
+    # Busca dados de vendas e receita
+    vendas_data = conn.execute('''
+        SELECT COUNT(v.id), SUM(p.preco) 
+        FROM vendas v 
+        JOIN produtos p ON v.produto_id = p.id 
+        WHERE v.status = ?
+    ''', ('aprovado',)).fetchone()
+    total_vendas_aprovadas = vendas_data[0] or 0
+    receita_total = vendas_data[1] or 0.0
 
-@app.route('/add_product', methods=['POST'])
-def add_product():
-    if not session.get('logged_in'): return redirect(url_for('login'))
-    nome, preco, link = request.form['nome'], request.form['preco'], request.form['link']
-    conn = get_db_connection()
-    # ---- CORREÇÃO SQL INJECTION APLICADA ----
-    # Usando '?' para inserir dados de forma segura.
-    conn.execute('INSERT INTO produtos (nome, preco, link) VALUES (?, ?, ?)', (nome, preco, link))
-    conn.commit()
+    # Busca vendas recentes
+    vendas_recentes = conn.execute('''
+        SELECT v.id, u.username, p.nome, p.preco, v.status, v.data_venda 
+        FROM vendas v 
+        JOIN users u ON v.user_id = u.id 
+        JOIN produtos p ON v.produto_id = p.id 
+        ORDER BY v.id DESC LIMIT 5
+    ''').fetchall()
     conn.close()
-    flash('Produto adicionado com sucesso!', 'success')
-    return redirect(url_for('index'))
+
+    return render_template('index.html', 
+                           total_vendas=total_vendas_aprovadas, 
+                           total_usuarios=total_usuarios, 
+                           total_produtos=total_produtos,
+                           receita_total=receita_total,
+                           vendas_recentes=vendas_recentes)
+
+# --- NOVAS ROTAS DE GESTÃO ---
+
+@app.route('/produtos', methods=['GET', 'POST'])
+def produtos():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    
+    if request.method == 'POST':
+        nome = request.form['nome']
+        preco = request.form['preco']
+        link = request.form['link']
+        
+        conn = get_db_connection()
+        conn.execute('INSERT INTO produtos (nome, preco, link) VALUES (?, ?, ?)', (nome, preco, link))
+        conn.commit()
+        conn.close()
+        flash('Produto adicionado com sucesso!', 'success')
+        return redirect(url_for('produtos'))
+
+    conn = get_db_connection()
+    lista_produtos = conn.execute('SELECT * FROM produtos ORDER BY id DESC').fetchall()
+    conn.close()
+    return render_template('produtos.html', produtos=lista_produtos)
 
 @app.route('/remove_product/<int:id>')
 def remove_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    # ---- CORREÇÃO SQL INJECTION APLICADA ----
-    # Usando '?' para remover um item de forma segura, referenciando seu 'id'.
     conn.execute('DELETE FROM produtos WHERE id = ?', (id,))
     conn.commit()
     conn.close()
     flash('Produto removido com sucesso!', 'danger')
-    return redirect(url_for('index'))
+    return redirect(url_for('produtos'))
+
+@app.route('/vendas')
+def vendas():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    lista_vendas = conn.execute('''
+        SELECT v.id, u.username, u.first_name, p.nome, p.preco, v.status, v.data_venda 
+        FROM vendas v 
+        JOIN users u ON v.user_id = u.id 
+        JOIN produtos p ON v.produto_id = p.id 
+        ORDER BY v.id DESC
+    ''').fetchall()
+    conn.close()
+    return render_template('vendas.html', vendas=lista_vendas)
+
+@app.route('/usuarios')
+def usuarios():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    lista_usuarios = conn.execute('SELECT * FROM users ORDER BY id DESC').fetchall()
+    conn.close()
+    return render_template('usuarios.html', usuarios=lista_usuarios)
 
 @app.route('/remove_user/<int:id>')
 def remove_user(id):
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
+    if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    # ---- CORREÇÃO SQL INJECTION APLICADA ----
-    # Usando '?' também para remover usuários.
     conn.execute('DELETE FROM users WHERE id = ?', (id,))
     conn.commit()
     conn.close()
     flash('Usuário removido com sucesso!', 'danger')
-    return redirect(url_for('index'))
+    return redirect(url_for('usuarios'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

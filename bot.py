@@ -17,70 +17,78 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- COMANDOS INICIAIS ---
-
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    first_name = message.from_user.first_name
-    last_name = message.from_user.last_name
-    data_registro = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
+def get_or_register_user(user: types.User):
+    """Verifica se um usuário existe no banco de dados e o registra se não existir."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    user = cursor.fetchone()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user.id,))
+    db_user = cursor.fetchone()
 
-    if user is None:
+    if db_user is None:
+        data_registro = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor.execute("INSERT INTO users (id, username, first_name, last_name, data_registro) VALUES (?, ?, ?, ?, ?)",
-                       (user_id, username, first_name, last_name, data_registro))
+                       (user.id, user.username, user.first_name, user.last_name, data_registro))
         conn.commit()
     
     conn.close()
 
+
+# --- COMANDOS INICIAIS ---
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    get_or_register_user(message.from_user) # Garante que o usuário está registrado
+    
     markup = types.InlineKeyboardMarkup()
     btn_produtos = types.InlineKeyboardButton("🛍️ Ver Produtos", callback_data='ver_produtos')
     markup.add(btn_produtos)
-    bot.reply_to(message, f"Olá, {first_name}! Bem-vindo(a) ao nosso bot de vendas. ✨", reply_markup=markup)
+    bot.reply_to(message, f"Olá, {message.from_user.first_name}! Bem-vindo(a) ao nosso bot de vendas. ✨", reply_markup=markup)
 
-# --- CALLBACK HANDLERS ---
+# --- CALLBACK HANDLERS (LÓGICA CORRIGIDA) ---
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
+    # Garante que o usuário que clicou no botão seja registrado
+    get_or_register_user(call.from_user)
+    
     if call.data == 'ver_produtos':
-        mostrar_produtos(call.message)
+        mostrar_produtos(call.message.chat.id)
     elif call.data.startswith('comprar_'):
         produto_id = int(call.data.split('_')[1])
-        gerar_cobranca(call.message, produto_id)
+        # Passa o objeto 'call' inteiro para ter acesso ao usuário correto
+        gerar_cobranca(call, produto_id)
 
-def mostrar_produtos(message):
+def mostrar_produtos(chat_id):
     conn = get_db_connection()
     produtos = conn.execute('SELECT * FROM produtos').fetchall()
     conn.close()
 
     if not produtos:
-        bot.send_message(message.chat.id, "Nenhum produto disponível no momento. 🙁")
+        bot.send_message(chat_id, "Nenhum produto disponível no momento. �")
         return
 
     for produto in produtos:
         markup = types.InlineKeyboardMarkup()
         btn_comprar = types.InlineKeyboardButton(f"Comprar por R${produto['preco']:.2f}", callback_data=f"comprar_{produto['id']}")
         markup.add(btn_comprar)
-        bot.send_message(message.chat.id, f"💎 *{produto['nome']}*\n\nPreço: R${produto['preco']:.2f}", parse_mode='Markdown', reply_markup=markup)
+        bot.send_message(chat_id, f"💎 *{produto['nome']}*\n\nPreço: R${produto['preco']:.2f}", parse_mode='Markdown', reply_markup=markup)
 
-def gerar_cobranca(message, produto_id):
-    user_id = message.chat.id
+def gerar_cobranca(call: types.CallbackQuery, produto_id: int):
+    # Pega o ID do usuário que CLICOU no botão, não do autor da mensagem original
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    
     conn = get_db_connection()
     produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (produto_id,)).fetchone()
 
     if not produto:
-        bot.send_message(user_id, "Produto não encontrado.")
+        bot.send_message(chat_id, "Produto não encontrado.")
         conn.close()
         return
         
     data_venda = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor = conn.cursor()
+    # Insere a venda com o ID do usuário correto
     cursor.execute(
         "INSERT INTO vendas (user_id, produto_id, status, data_venda) VALUES (?, ?, ?, ?)",
         (user_id, produto_id, 'pendente', data_venda)
@@ -96,19 +104,17 @@ def gerar_cobranca(message, produto_id):
     )
     conn.close()
     
-    # Verifica se o pagamento foi criado com sucesso antes de prosseguir
     if pagamento and 'point_of_interaction' in pagamento:
         qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
         qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
         
         qr_code_image = base64.b64decode(qr_code_base64)
 
-        bot.send_photo(user_id, qr_code_image, caption=f"✅ PIX gerado para *{produto['nome']}*!\n\nEscaneie o QR Code ou use o código abaixo:")
-        bot.send_message(user_id, f"```{qr_code_data}```", parse_mode='Markdown')
-        bot.send_message(user_id, "Assim que o pagamento for confirmado, você receberá o produto automaticamente aqui. 😊")
+        bot.send_photo(chat_id, qr_code_image, caption=f"✅ PIX gerado para *{produto['nome']}*!\n\nEscaneie o QR Code ou use o código abaixo:")
+        bot.send_message(chat_id, f"```{qr_code_data}```", parse_mode='Markdown')
+        bot.send_message(chat_id, "Assim que o pagamento for confirmado, você receberá o produto automaticamente aqui. 😊")
     else:
-        # Mensagem de erro para o usuário e log do erro para o admin (no console)
-        bot.send_message(user_id, "Desculpe, ocorreu um erro ao gerar o PIX. Tente novamente mais tarde ou contate o suporte.")
+        bot.send_message(chat_id, "Desculpe, ocorreu um erro ao gerar o PIX. Tente novamente mais tarde ou contate o suporte.")
         print(f"[ERRO] Falha ao gerar PIX. Resposta do MP: {pagamento}")
 
 
