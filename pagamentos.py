@@ -1,36 +1,58 @@
 import mercadopago
-import config  # Importa as configurações
+import config
 
-def criar_pagamento_pix(valor, descricao, email, venda_id):
+# Função atualizada para aceitar o objeto do produto e do usuário
+def criar_pagamento_pix(produto, user, venda_id):
     """
-    Cria um pagamento PIX no Mercado Pago com uma URL de notificação (webhook).
-
-    Args:
-        valor (float): O preço do produto.
-        descricao (str): Descrição do produto.
-        email (str): Email do comprador (pode ser um email genérico).
-        venda_id (int): O ID único da venda gerado no nosso banco de dados.
-
-    Returns:
-        dict: O dicionário com os dados do pagamento ou None em caso de erro.
+    Cria um pagamento PIX no Mercado Pago com todos os campos de qualidade recomendados.
     """
     sdk = mercadopago.SDK(config.MERCADOPAGO_ACCESS_TOKEN)
-
-    # A URL para a qual o Mercado Pago enviará as notificações POST
-    # Ex: https://sua-url.ngrok.io/webhook/mercado-pago
     notification_url = f"{config.BASE_URL}/webhook/mercado-pago"
     
+    # --- DADOS DO PAGAMENTO ATUALIZADOS ---
     payment_data = {
-        'transaction_amount': float(valor),
-        'description': descricao,
+        'transaction_amount': float(produto['preco']),
         'payment_method_id': 'pix',
+        
+        # --- Dados do pagador (ainda mais completos) ---
         'payer': {
-            'email': email,
+            'email': f"user_{user.id}@email.com",
+            'first_name': user.first_name or "Comprador", # Garante que não seja nulo
+            'last_name': user.last_name or "Bot",       # Garante que não seja nulo
+            'identification': {
+                'type': 'OTHER',
+                'number': str(user.id) # Usa o ID do Telegram como identificação
+            }
         },
+        
         'notification_url': notification_url,
-        # A referência externa agora é o ID da venda, para sabermos qual compra foi paga.
-        # Isso é FUNDAMENTAL para o webhook funcionar corretamente.
-        'external_reference': str(venda_id)
+        'external_reference': str(venda_id),
+        
+        # Descrição geral da transação
+        'description': f"Venda de produto digital: {produto['nome']}",
+        'statement_descriptor': 'BOTVENDAS',
+        
+        # --- NOVOS CAMPOS DE QUALIDADE DENTRO DE "additional_info" ---
+        'additional_info': {
+            "items": [
+                {
+                    "id": str(produto['id']),
+                    "title": produto['nome'],
+                    "description": f"Conteúdo digital: {produto['nome']}",
+                    "category_id": "digital_content",
+                    "quantity": 1,
+                    "unit_price": float(produto['preco']),
+                }
+            ],
+            "payer": {
+                "first_name": user.first_name or "Comprador",
+                "last_name": user.last_name or "Bot",
+                "phone": { # Adiciona um telefone genérico para aumentar a pontuação
+                    "area_code": "11",
+                    "number": "999999999"
+                }
+            },
+        }
     }
 
     try:
@@ -39,18 +61,13 @@ def criar_pagamento_pix(valor, descricao, email, venda_id):
         return payment
     except Exception as e:
         print(f"Erro ao criar pagamento PIX: {e}")
+        if hasattr(e, 'response') and hasattr(e.response, 'json'):
+            print("Resposta do MP:", e.response.json())
         return None
-
 
 def verificar_status_pagamento(payment_id):
     """
     Verifica o status de um pagamento específico no Mercado Pago.
-
-    Args:
-        payment_id (str): O ID do pagamento a ser verificado.
-
-    Returns:
-        dict: O dicionário com os dados do pagamento ou None em caso de erro.
     """
     sdk = mercadopago.SDK(config.MERCADOPAGO_ACCESS_TOKEN)
     try:

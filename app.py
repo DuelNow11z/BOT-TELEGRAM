@@ -33,7 +33,16 @@ def webhook_mercado_pago():
             venda = conn.execute('SELECT * FROM vendas WHERE id = ? AND status = ?', (venda_id, 'pendente')).fetchone()
 
             if venda:
-                conn.execute('UPDATE vendas SET status = ?, payment_id = ? WHERE id = ?', ('aprovado', payment_id, venda_id))
+                payer_info = payment_info.get('payer', {})
+                payer_name = f"{payer_info.get('first_name', '')} {payer_info.get('last_name', '')}".strip()
+                payer_email = payer_info.get('email')
+
+                conn.execute('''
+                    UPDATE vendas 
+                    SET status = ?, payment_id = ?, payer_name = ?, payer_email = ? 
+                    WHERE id = ?
+                ''', ('aprovado', payment_id, payer_name, payer_email, venda_id))
+                
                 conn.commit()
                 produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (venda['produto_id'],)).fetchone()
                 conn.close()
@@ -47,9 +56,7 @@ def webhook_mercado_pago():
 
 def enviar_produto_telegram(user_id, nome_produto, link_produto):
     url = f"https://api.telegram.org/bot{config.API_TOKEN}/sendMessage"
-    texto = (f"🎉 Pagamento Aprovado!\n\n"
-             f"Obrigado por comprar *{nome_produto}*.\n\n"
-             f"Aqui está o seu link de acesso:\n{link_produto}")
+    texto = (f"🎉 Pagamento Aprovado!\n\nObrigado por comprar *{nome_produto}*.\n\nAqui está o seu link de acesso:\n{link_produto}")
     payload = { 'chat_id': user_id, 'text': texto, 'parse_mode': 'Markdown' }
     try:
         requests.post(url, json=payload)
@@ -108,7 +115,7 @@ def index():
         day = today - timedelta(days=i)
         start_of_day, end_of_day = datetime.combine(day.date(), time.min), datetime.combine(day.date(), time.max)
         chart_labels.append(day.strftime('%d/%m'))
-        daily_revenue = conn.execute("SELECT SUM(p.preco) FROM vendas v JOIN produtos p ON v.produto_id = p.id WHERE v.status = 'aprovado' AND v.data_venda BETWEEN ? AND ?", (start_of_day, end_of_day)).fetchone()[0]
+        daily_revenue = conn.execute("SELECT SUM(preco) FROM vendas WHERE status = 'aprovado' AND data_venda BETWEEN ? AND ?", (start_of_day, end_of_day)).fetchone()[0]
         chart_data.append(daily_revenue or 0)
     conn.close()
 
@@ -133,7 +140,6 @@ def produtos():
     conn.close()
     return render_template('produtos.html', produtos=lista_produtos)
 
-# --- NOVA ROTA PARA EDITAR PRODUTOS ---
 @app.route('/edit_product/<int:id>', methods=['GET', 'POST'])
 def edit_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -141,11 +147,8 @@ def edit_product(id):
     produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (id,)).fetchone()
 
     if request.method == 'POST':
-        nome = request.form['nome']
-        preco = request.form['preco']
-        link = request.form['link']
-        conn.execute('UPDATE produtos SET nome = ?, preco = ?, link = ? WHERE id = ?',
-                     (nome, preco, link, id))
+        nome, preco, link = request.form['nome'], request.form['preco'], request.form['link']
+        conn.execute('UPDATE produtos SET nome = ?, preco = ?, link = ? WHERE id = ?', (nome, preco, link, id))
         conn.commit()
         conn.close()
         flash('Produto atualizado com sucesso!', 'success')
@@ -168,11 +171,12 @@ def remove_product(id):
 def vendas():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
+    
     produtos_disponiveis = conn.execute('SELECT id, nome FROM produtos ORDER BY nome').fetchall()
     query_base = '''
         SELECT T.*
         FROM (
-            SELECT v.id, u.username, u.first_name, p.nome, p.preco, v.data_venda, p.id as produto_id,
+            SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, p.id as produto_id,
                    CASE
                        WHEN v.status = 'aprovado' THEN 'aprovado'
                        WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-24 hours') > DATETIME(v.data_venda) THEN 'cancelado'
@@ -183,32 +187,34 @@ def vendas():
             JOIN produtos p ON v.produto_id = p.id
         ) AS T
     '''
-    conditions = []
-    params = []
+    conditions, params = [], []
 
     data_inicio_str, data_fim_str, pesquisa_str, produto_id_str, status_str = (
         request.args.get('data_inicio'), request.args.get('data_fim'),
         request.args.get('pesquisa'), request.args.get('produto_id'), request.args.get('status')
     )
     
-    if data_inicio_str:
-        conditions.append("DATE(T.data_venda) >= ?"); params.append(data_inicio_str)
-    if data_fim_str:
-        conditions.append("DATE(T.data_venda) <= ?"); params.append(data_fim_str)
-    if pesquisa_str:
-        conditions.append("(T.username LIKE ? OR T.nome LIKE ? OR T.first_name LIKE ?)")
-        params.extend([f'%{pesquisa_str}%'] * 3)
-    if produto_id_str:
-        conditions.append("T.produto_id = ?"); params.append(produto_id_str)
-    if status_str:
-        conditions.append("T.status = ?"); params.append(status_str)
+    if data_inicio_str: conditions.append("DATE(T.data_venda) >= ?"); params.append(data_inicio_str)
+    if data_fim_str: conditions.append("DATE(T.data_venda) <= ?"); params.append(data_fim_str)
+    if pesquisa_str: conditions.append("(T.username LIKE ? OR T.nome LIKE ? OR T.first_name LIKE ?)"); params.extend([f'%{pesquisa_str}%'] * 3)
+    if produto_id_str: conditions.append("T.produto_id = ?"); params.append(produto_id_str)
+    if status_str: conditions.append("T.status = ?"); params.append(status_str)
 
-    if conditions:
-        query_base += " WHERE " + " AND ".join(conditions)
+    if conditions: query_base += " WHERE " + " AND ".join(conditions)
     query_base += " ORDER BY T.id DESC"
     lista_vendas = conn.execute(query_base, tuple(params)).fetchall()
     conn.close()
     return render_template('vendas.html', vendas=lista_vendas, produtos_disponiveis=produtos_disponiveis)
+
+@app.route('/venda_detalhes/<int:id>')
+def venda_detalhes(id):
+    if not session.get('logged_in'): return jsonify({'error': 'Unauthorized'}), 401
+    conn = get_db_connection()
+    venda = conn.execute('SELECT * FROM vendas WHERE id = ?', (id,)).fetchone()
+    conn.close()
+    if venda:
+        return jsonify(dict(venda))
+    return jsonify({'error': 'Not Found'}), 404
 
 @app.route('/usuarios')
 def usuarios():
@@ -227,6 +233,24 @@ def remove_user(id):
     conn.close()
     flash('Usuário removido com sucesso!', 'danger')
     return redirect(url_for('usuarios'))
+
+# --- NOVAS ROTAS PARA BACK_URLS ---
+@app.route('/pagamento/<status>')
+def pagamento_retorno(status):
+    mensagem = "Status do Pagamento: "
+    if status == 'sucesso':
+        mensagem += "Aprovado com sucesso!"
+    elif status == 'falha':
+        mensagem += "Pagamento falhou."
+    elif status == 'pendente':
+        mensagem += "Pagamento pendente."
+    
+    return f"""
+        <div style='font-family: sans-serif; text-align: center; padding-top: 50px;'>
+            <h1>{mensagem}</h1>
+            <p>Você pode fechar esta janela e voltar para o Telegram.</p>
+        </div>
+    """
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

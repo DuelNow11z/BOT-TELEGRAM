@@ -1,16 +1,9 @@
 import sqlite3
 
-# Nome do arquivo do banco de dados
 DB_NAME = 'dashboard.db'
-
-# Conecta ao banco de dados (cria o arquivo se não existir)
 conn = sqlite3.connect(DB_NAME)
 cursor = conn.cursor()
 
-# --- Criação das Tabelas ---
-
-# Tabela para armazenar informações dos usuários do bot
-# Esta tabela é populada pelo seu bot.py
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
@@ -21,7 +14,6 @@ CREATE TABLE IF NOT EXISTS users (
 )
 ''')
 
-# Tabela para armazenar os produtos à venda
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS produtos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,24 +23,25 @@ CREATE TABLE IF NOT EXISTS produtos (
 )
 ''')
 
-# Tabela para registrar as vendas
+# --- TABELA DE VENDAS ATUALIZADA ---
+# Adicionamos a coluna 'preco' para guardar o valor no momento da venda.
+print("Atualizando tabela 'vendas'...")
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS vendas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     produto_id INTEGER,
+    preco REAL, 
     payment_id TEXT,
     status TEXT,
     data_venda TEXT,
+    payer_name TEXT,
+    payer_email TEXT,
     FOREIGN KEY (user_id) REFERENCES users (id),
     FOREIGN KEY (produto_id) REFERENCES produtos (id)
 )
 ''')
 
-# --- NOVA TABELA ADMIN ---
-# Tabela para armazenar os administradores do painel de controle
-# A senha é armazenada como um "hash", um formato seguro que não pode ser revertido.
-print("Criando tabela 'admin'...")
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS admin (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,11 +50,6 @@ CREATE TABLE IF NOT EXISTS admin (
 )
 ''')
 
-
-# Salva as alterações e fecha a conexão
 conn.commit()
 conn.close()
-
 print(f"Banco de dados '{DB_NAME}' inicializado com sucesso!")
-print("Tabelas: users, produtos, vendas, admin foram criadas.")
-
