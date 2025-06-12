@@ -1,38 +1,39 @@
+import os
 import mercadopago
-import config
 
-# Função atualizada para aceitar o objeto do produto e do usuário
+# --- CONFIGURAÇÃO ATUALIZADA ---
+# Lendo as chaves diretamente das Variáveis de Ambiente
+MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
+BASE_URL = os.getenv('BASE_URL')
+
+sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
+
 def criar_pagamento_pix(produto, user, venda_id):
     """
     Cria um pagamento PIX no Mercado Pago com todos os campos de qualidade recomendados.
     """
-    sdk = mercadopago.SDK(config.MERCADOPAGO_ACCESS_TOKEN)
-    notification_url = f"{config.BASE_URL}/webhook/mercado-pago"
+    if not BASE_URL:
+        print("[ERRO] A variável de ambiente BASE_URL não está definida.")
+        return None
+        
+    notification_url = f"{BASE_URL}/webhook/mercado-pago"
     
-    # --- DADOS DO PAGAMENTO ATUALIZADOS ---
     payment_data = {
         'transaction_amount': float(produto['preco']),
         'payment_method_id': 'pix',
-        
-        # --- Dados do pagador (ainda mais completos) ---
         'payer': {
             'email': f"user_{user.id}@email.com",
-            'first_name': user.first_name or "Comprador", # Garante que não seja nulo
-            'last_name': user.last_name or "Bot",       # Garante que não seja nulo
+            'first_name': user.first_name or "Comprador",
+            'last_name': user.last_name or "Bot",
             'identification': {
                 'type': 'OTHER',
-                'number': str(user.id) # Usa o ID do Telegram como identificação
+                'number': str(user.id)
             }
         },
-        
         'notification_url': notification_url,
         'external_reference': str(venda_id),
-        
-        # Descrição geral da transação
         'description': f"Venda de produto digital: {produto['nome']}",
         'statement_descriptor': 'BOTVENDAS',
-        
-        # --- NOVOS CAMPOS DE QUALIDADE DENTRO DE "additional_info" ---
         'additional_info': {
             "items": [
                 {
@@ -47,7 +48,7 @@ def criar_pagamento_pix(produto, user, venda_id):
             "payer": {
                 "first_name": user.first_name or "Comprador",
                 "last_name": user.last_name or "Bot",
-                "phone": { # Adiciona um telefone genérico para aumentar a pontuação
+                "phone": {
                     "area_code": "11",
                     "number": "999999999"
                 }
@@ -69,7 +70,6 @@ def verificar_status_pagamento(payment_id):
     """
     Verifica o status de um pagamento específico no Mercado Pago.
     """
-    sdk = mercadopago.SDK(config.MERCADOPAGO_ACCESS_TOKEN)
     try:
         payment_info = sdk.payment().get(payment_id)
         return payment_info["response"]
