@@ -3,3 +3,4 @@ requests
 mercadopago
 pyTelegramBotAPI
 gunicorn
+psycopg2-binary
