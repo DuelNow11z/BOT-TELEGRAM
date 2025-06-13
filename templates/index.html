@@ -61,7 +61,6 @@
                 <tbody class="divide-y divide-gray-200 bg-white">
                 {% for venda in vendas_recentes %}
                 <tr>
-                    <!-- MODIFICAÇÃO REVERTIDA AQUI -->
                     <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">{{ venda.first_name or '' }} (@{{ venda.username or 'N/A' }})</td>
                     <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">{{ venda.nome }}</td>
                     <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">R$ {{ "%.2f"|format(venda.preco) }}</td>
@@ -69,8 +68,8 @@
                     <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                         {% if venda.status == 'aprovado' %}
                             <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">Aprovado</span>
-                        {% elif venda.status == 'cancelado' %}
-                            <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">Cancelado</span>
+                        {% elif venda.status == 'expirado' %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">Expirado</span>
                         {% else %}
                             <span class="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">Pendente</span>
                         {% endif %}

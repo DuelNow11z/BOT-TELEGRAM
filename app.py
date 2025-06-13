@@ -69,16 +69,21 @@ def webhook_mercado_pago():
             if not venda_id: return jsonify({'status': 'ignored'}), 200
             
             conn = get_db_connection()
-            venda = conn.execute('SELECT * FROM vendas WHERE id = ? AND status = ?', (venda_id, 'pendente')).fetchone()
+            # Busca a venda independentemente do status para verificar a data
+            venda = conn.execute('SELECT * FROM vendas WHERE id = ?', (venda_id,)).fetchone()
 
             if venda:
-                # --- LÓGICA DE CANCELAMENTO APLICADA AQUI ---
+                # Se o pagamento já foi processado (aprovado ou expirado), ignora
+                if venda['status'] != 'pendente':
+                    conn.close()
+                    return jsonify({'status': 'already_processed'}), 200
+
                 # Verifica se a venda já expirou (mais de 1 hora)
                 data_venda_dt = datetime.strptime(venda['data_venda'], '%Y-%m-%d %H:%M:%S')
                 if datetime.now() > data_venda_dt + timedelta(hours=1):
                     print(f"Pagamento recebido para venda expirada (ID: {venda_id}). Ignorando entrega.")
-                    # Atualiza o status no banco para 'cancelado' para evitar reprocessamento
-                    conn.execute('UPDATE vendas SET status = ? WHERE id = ?', ('cancelado', venda_id))
+                    # Atualiza o status no banco para 'expirado' para evitar reprocessamento
+                    conn.execute('UPDATE vendas SET status = ? WHERE id = ?', ('expirado', venda_id))
                     conn.commit()
                     conn.close()
                     return jsonify({'status': 'expired_and_ignored'}), 200
@@ -95,9 +100,6 @@ def webhook_mercado_pago():
                 if produto:
                     enviar_produto_telegram(venda['user_id'], produto['nome'], produto['link'])
                 return jsonify({'status': 'success'}), 200
-            else:
-                conn.close()
-                return jsonify({'status': 'already_processed'}), 200
     return jsonify({'status': 'ignored'}), 200
 
 
@@ -131,7 +133,7 @@ def index():
     vendas_data = conn.execute("SELECT COUNT(id), SUM(preco) FROM vendas WHERE status = ?", ('aprovado',)).fetchone()
     total_vendas_aprovadas = vendas_data[0] or 0
     receita_total = vendas_data[1] or 0.0
-    vendas_recentes = conn.execute("SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, CASE WHEN v.status = 'aprovado' THEN 'aprovado' WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-1 hour') > DATETIME(v.data_venda) THEN 'cancelado' ELSE 'pendente' END AS status FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id ORDER BY v.id DESC LIMIT 5").fetchall()
+    vendas_recentes = conn.execute("SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, CASE WHEN v.status = 'aprovado' THEN 'aprovado' WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-1 hour') > DATETIME(v.data_venda) THEN 'expirado' ELSE v.status END AS status FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id ORDER BY v.id DESC LIMIT 5").fetchall()
     chart_labels, chart_data = [], []
     today = datetime.now()
     for i in range(6, -1, -1):
@@ -189,7 +191,7 @@ def vendas():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     produtos_disponiveis = conn.execute('SELECT id, nome FROM produtos ORDER BY nome').fetchall()
-    query_base = "SELECT T.* FROM (SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, p.id as produto_id, CASE WHEN v.status = 'aprovado' THEN 'aprovado' WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-1 hour') > DATETIME(v.data_venda) THEN 'cancelado' ELSE 'pendente' END AS status FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id) AS T"
+    query_base = "SELECT T.* FROM (SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, p.id as produto_id, CASE WHEN v.status = 'aprovado' THEN 'aprovado' WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-1 hour') > DATETIME(v.data_venda) THEN 'expirado' ELSE v.status END AS status FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id) AS T"
     conditions, params = [], []
     data_inicio_str, data_fim_str, pesquisa_str, produto_id_str, status_str = (request.args.get('data_inicio'), request.args.get('data_fim'), request.args.get('pesquisa'), request.args.get('produto_id'), request.args.get('status'))
     if data_inicio_str: conditions.append("DATE(T.data_venda) >= ?"); params.append(data_inicio_str)
