@@ -15,7 +15,6 @@ API_TOKEN = os.getenv('API_TOKEN')
 BASE_URL = os.getenv('BASE_URL')
 
 # --- CORREÇÃO PARA RENDER ---
-# A inicialização do bot é movida para garantir que funcione no ambiente de produção.
 bot = telebot.TeleBot(API_TOKEN, threaded=False)
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'uma_chave_padrao_muito_segura')
@@ -68,9 +67,23 @@ def webhook_mercado_pago():
         if payment_info and payment_info['status'] == 'approved':
             venda_id = payment_info.get('external_reference')
             if not venda_id: return jsonify({'status': 'ignored'}), 200
+            
             conn = get_db_connection()
             venda = conn.execute('SELECT * FROM vendas WHERE id = ? AND status = ?', (venda_id, 'pendente')).fetchone()
+
             if venda:
+                # --- LÓGICA DE CANCELAMENTO APLICADA AQUI ---
+                # Verifica se a venda já expirou (mais de 1 hora)
+                data_venda_dt = datetime.strptime(venda['data_venda'], '%Y-%m-%d %H:%M:%S')
+                if datetime.now() > data_venda_dt + timedelta(hours=1):
+                    print(f"Pagamento recebido para venda expirada (ID: {venda_id}). Ignorando entrega.")
+                    # Atualiza o status no banco para 'cancelado' para evitar reprocessamento
+                    conn.execute('UPDATE vendas SET status = ? WHERE id = ?', ('cancelado', venda_id))
+                    conn.commit()
+                    conn.close()
+                    return jsonify({'status': 'expired_and_ignored'}), 200
+
+                # Se a venda não expirou, processa normalmente
                 payer_info = payment_info.get('payer', {})
                 payer_name = f"{payer_info.get('first_name', '')} {payer_info.get('last_name', '')}".strip()
                 payer_email = payer_info.get('email')
@@ -87,8 +100,7 @@ def webhook_mercado_pago():
                 return jsonify({'status': 'already_processed'}), 200
     return jsonify({'status': 'ignored'}), 200
 
-# (O resto do seu código de rotas do painel continua igual)
-# ...
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if 'logged_in' in session: return redirect(url_for('index'))
