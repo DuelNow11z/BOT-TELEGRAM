@@ -146,24 +146,27 @@ def logout():
 @app.route('/')
 def index():
     if not session.get('logged_in'): return redirect(url_for('login'))
-    # LÓGICA DO DASHBOARD REIMPLEMENTADA
+    
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    
-    # Por agora, os dados são globais. Futuramente, filtraremos por tenant_id.
     tenant_id = session.get('tenant_id', 1) 
 
-    cur.execute('SELECT COUNT(id) FROM users') # WHERE tenant_id = %s', (tenant_id,))
+    cur.execute('SELECT COUNT(id) FROM users')
     total_usuarios = cur.fetchone()[0]
     
-    cur.execute('SELECT COUNT(id) FROM planos') # WHERE tenant_id = %s', (tenant_id,))
+    cur.execute('SELECT COUNT(id) FROM planos')
     total_planos = cur.fetchone()[0]
     
-    cur.execute("SELECT COUNT(id), SUM(preco) FROM assinaturas WHERE status = %s", ('ativo',)) # WHERE tenant_id = %s
+    # --- CORREÇÃO DA QUERY DE RECEITA ---
+    cur.execute("""
+        SELECT COUNT(a.id), SUM(p.preco) 
+        FROM assinaturas a
+        JOIN planos p ON a.plano_id = p.id
+        WHERE a.status = %s
+    """, ('ativo',))
     vendas_data = cur.fetchone()
     total_assinaturas_ativas = vendas_data[0] or 0
-    # A receita total será mais complexa de calcular com assinaturas (precisará de uma tabela de pagamentos)
-    receita_total = 0.0 
+    receita_total = vendas_data[1] or 0.0
 
     cur.execute("""
         SELECT a.id, u.username, u.first_name, p.nome, p.preco, a.data_inicio, a.status
@@ -171,17 +174,27 @@ def index():
         JOIN users u ON a.user_id = u.id AND a.tenant_id = u.tenant_id
         JOIN planos p ON a.plano_id = p.id
         ORDER BY a.id DESC LIMIT 5
-    """) # WHERE a.tenant_id = %s
+    """)
     assinaturas_recentes = cur.fetchall()
     
     chart_labels, chart_data = [], []
     today = datetime.now()
     for i in range(6, -1, -1):
         day = today - timedelta(days=i)
+        start_of_day_str = datetime.combine(day, time.min).strftime('%Y-%m-%d %H:%M:%S')
+        end_of_day_str = datetime.combine(day, time.max).strftime('%Y-%m-%d %H:%M:%S')
         chart_labels.append(day.strftime('%d/%m'))
-        # A lógica do gráfico precisará ser adaptada para uma tabela de pagamentos
-        chart_data.append(0) 
-
+        
+        # --- CORREÇÃO DA QUERY DO GRÁFICO ---
+        cur.execute("""
+            SELECT SUM(p.preco) 
+            FROM assinaturas a
+            JOIN planos p ON a.plano_id = p.id
+            WHERE a.status = 'ativo' AND a.data_inicio BETWEEN %s AND %s
+        """, (start_of_day_str, end_of_day_str))
+        daily_revenue = cur.fetchone()[0]
+        chart_data.append(float(daily_revenue or 0.0))
+        
     cur.close()
     conn.close()
     
@@ -189,7 +202,7 @@ def index():
                            total_assinaturas=total_assinaturas_ativas, 
                            total_usuarios=total_usuarios, 
                            total_planos=total_planos,
-                           receita_total=receita_total,
+                           receita_total=float(receita_total),
                            assinaturas_recentes=assinaturas_recentes,
                            chart_labels=json.dumps(chart_labels), 
                            chart_data=json.dumps(chart_data))
@@ -200,7 +213,7 @@ def planos():
     
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    tenant_id = session.get('tenant_id', 1) # Provisório
+    tenant_id = session.get('tenant_id', 1)
 
     if request.method == 'POST':
         nome, preco, frequencia, intervalo = request.form['nome'], float(request.form['preco']), request.form['frequencia'], int(request.form['intervalo'])
@@ -222,7 +235,7 @@ def planos():
         conn.close()
         return redirect(url_for('planos'))
 
-    cur.execute('SELECT * FROM planos ORDER BY id DESC') # WHERE tenant_id = %s', (tenant_id,))
+    cur.execute('SELECT * FROM planos ORDER BY id DESC')
     lista_planos = cur.fetchall()
     cur.close()
     conn.close()
@@ -234,8 +247,8 @@ def usuarios():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    tenant_id = session.get('tenant_id', 1) # Provisório
-    cur.execute('SELECT * FROM users ORDER BY id DESC') # WHERE tenant_id = %s', (tenant_id,))
+    tenant_id = session.get('tenant_id', 1)
+    cur.execute('SELECT * FROM users ORDER BY id DESC')
     lista_usuarios = cur.fetchall()
     cur.close()
     conn.close()
@@ -245,3 +258,4 @@ def usuarios():
 if __name__ != '__main__':
     print("Aplicação a iniciar em modo de produção...")
     init_db()
+
