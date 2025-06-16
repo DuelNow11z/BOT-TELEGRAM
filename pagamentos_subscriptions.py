@@ -1,25 +1,19 @@
 import mercadopago
 import os
+# Importa os clientes específicos para planos e assinaturas
+from mercadopago.clients import preapproval_plan, preapproval
 
 # Lê o token diretamente das variáveis de ambiente
 MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
-# Adicione o username do seu bot aqui para os links de retorno
 BOT_USERNAME = "seu_bot_aqui" # Ex: meusuperbot
 sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     """
-    Cria um plano de assinatura no Mercado Pago.
-
-    Args:
-        nome_plano (str): Nome do plano (ex: "Plano Mensal VIP").
-        valor (float): Preço a ser cobrado a cada ciclo.
-        frequencia (str): Unidade de tempo ('months' ou 'years').
-        intervalo (int): Número de unidades de tempo (ex: 1 para cada mês).
-
-    Returns:
-        dict: A resposta da API do Mercado Pago ou None em caso de erro.
+    Cria um plano de assinatura no Mercado Pago usando o cliente correto.
     """
+    # Cria um cliente específico para planos de assinatura
+    plan_client = preapproval_plan.PreapprovalPlanClient(sdk)
     
     plan_data = {
         "reason": nome_plano,
@@ -29,18 +23,19 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
             "transaction_amount": valor,
             "currency_id": "BRL"
         },
-        # MODIFICAÇÃO: Aponta a URL de retorno diretamente para o bot.
         "back_url": f"https://t.me/{BOT_USERNAME}"
     }
 
     try:
-        plan_response = sdk.preapproval_plan().create(plan_data)
-        if plan_response["status"] == 201:
+        # Usa o cliente para criar o plano
+        plan_response = plan_client.create(plan_data)
+        
+        # A resposta de sucesso para esta API tem o status no corpo
+        if plan_response and plan_response.get("status") == "active":
             print(f"Plano '{nome_plano}' criado com sucesso no Mercado Pago.")
-            return plan_response["response"]
+            return plan_response
         else:
-            print(f"Erro ao criar plano. Status: {plan_response['status']}")
-            print("Resposta:", plan_response.get("response"))
+            print(f"Erro ao criar plano. Resposta: {plan_response}")
             return None
     except Exception as e:
         print(f"Ocorreu uma exceção ao criar o plano: {e}")
@@ -48,22 +43,26 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
 
 def criar_link_assinatura(id_plano_mp, email_comprador):
     """
-    Cria o link de checkout para um usuário assinar um plano.
+    Cria o link de checkout para um utilizador assinar um plano.
     """
+    # Cria um cliente específico para assinaturas
+    preapproval_client = preapproval.PreapprovalClient(sdk)
+
     preapproval_data = {
         "preapproval_plan_id": id_plano_mp,
         "payer_email": email_comprador,
-        # MODIFICAÇÃO: Garante que a URL de retorno aponte para o bot.
         "back_url": f"https://t.me/{BOT_USERNAME}"
     }
 
     try:
-        preapproval_response = sdk.preapproval().create(preapproval_data)
-        if preapproval_response["status"] == 201:
-            # Retorna o link de checkout para o usuário
-            return preapproval_response["response"]["init_point"]
+        # Usa o cliente para criar o link de assinatura
+        preapproval_response = preapproval_client.create(preapproval_data)
+
+        if preapproval_response and preapproval_response.get("id"):
+            # Retorna o link de checkout para o utilizador
+            return preapproval_response.get("init_point")
         else:
-            print(f"Erro ao criar link de assinatura. Status: {preapproval_response['status']}")
+            print(f"Erro ao criar link de assinatura. Resposta: {preapproval_response}")
             return None
     except Exception as e:
         print(f"Ocorreu uma exceção ao criar o link da assinatura: {e}")
