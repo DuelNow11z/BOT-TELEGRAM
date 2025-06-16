@@ -286,14 +286,16 @@ def gerar_cobranca(call: types.CallbackQuery, produto_id: int):
         qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
         qr_code_image = base64.b64decode(qr_code_base64)
         
-        # --- MENSAGEM ATUALIZADA AQUI ---
+        # --- LÓGICA DE MENSAGEM ATUALIZADA ---
         caption_text = (
             f"✅ PIX gerado para *{produto['nome']}*!\n\n"
-            "Escaneie o QR Code ou use o código abaixo:\n"
-            "_(Toque no código para copiar)_"
+            "Escaneie o QR Code acima ou copie o código completo na próxima mensagem."
         )
         bot.send_photo(chat_id, qr_code_image, caption=caption_text, parse_mode='Markdown')
-        bot.send_message(chat_id, f"```{qr_code_data}```", parse_mode='Markdown')
+        
+        # Envia o código em uma mensagem separada e sem formatação para garantir a cópia
+        bot.send_message(chat_id, qr_code_data)
+        
         bot.send_message(chat_id, "Você receberá o produto aqui assim que o pagamento for confirmado.")
     else:
         bot.send_message(chat_id, "Ocorreu um erro ao gerar o PIX. Tente novamente.")
