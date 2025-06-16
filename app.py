@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import json
 import requests
 import telebot
@@ -6,102 +7,35 @@ from telebot import types
 import base64
 import pagamentos
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import check_password_hash
 from datetime import datetime, timedelta, time
-import psycopg2 # Nova importação para PostgreSQL
-import psycopg2.extras
-import urllib.parse as up
 
 # --- CONFIGURAÇÃO INICIAL ---
 API_TOKEN = os.getenv('API_TOKEN')
 BASE_URL = os.getenv('BASE_URL')
-DATABASE_URL = os.getenv('DATABASE_URL') # URL do banco de dados da Render
 
+# --- CORREÇÃO PARA RENDER ---
 bot = telebot.TeleBot(API_TOKEN, threaded=False)
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'uma_chave_padrao_muito_segura')
 
-# --- CONEXÃO E INICIALIZAÇÃO DO BANCO DE DADOS POSTGRESQL ---
+DB_NAME = 'dashboard.db'
 
+# --- FUNÇÕES AUXILIARES ---
 def get_db_connection():
-    """Conecta ao banco de dados PostgreSQL usando a DATABASE_URL."""
-    up.uses_netloc.append("postgres")
-    url = up.urlparse(DATABASE_URL)
-    try:
-        conn = psycopg2.connect(database=url.path[1:],
-                                user=url.username,
-                                password=url.password,
-                                host=url.hostname,
-                                port=url.port)
-        return conn
-    except psycopg2.OperationalError as e:
-        print(f"Erro ao conectar ao PostgreSQL: {e}")
-        return None
-
-def init_db():
-    """Cria as tabelas do banco de dados se elas não existirem."""
-    conn = get_db_connection()
-    if conn is None:
-        print("Não foi possível inicializar o banco de dados: conexão falhou.")
-        return
-        
-    cur = conn.cursor()
-    # Usamos TEXT para datas para manter a compatibilidade com o código existente
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id BIGINT PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            last_name TEXT,
-            data_registro TEXT
-        );
-    ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS produtos (
-            id SERIAL PRIMARY KEY,
-            nome TEXT NOT NULL,
-            preco NUMERIC(10, 2) NOT NULL,
-            link TEXT NOT NULL
-        );
-    ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS vendas (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            produto_id INTEGER,
-            preco NUMERIC(10, 2), 
-            payment_id TEXT,
-            status TEXT,
-            data_venda TEXT,
-            payer_name TEXT,
-            payer_email TEXT
-        );
-    ''')
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS admin (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
-        );
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
-    print("Tabelas do banco de dados verificadas/criadas.")
-
-# --- FUNÇÕES AUXILIARES ADAPTADAS ---
+    db_path = os.path.join('/var/data/sqlite', DB_NAME) if os.path.exists('/var/data/sqlite') else DB_NAME
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row 
+    return conn
 
 def get_or_register_user(user: types.User):
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("SELECT * FROM users WHERE id = %s", (user.id,))
-    db_user = cur.fetchone()
+    db_user = conn.execute("SELECT * FROM users WHERE id = ?", (user.id,)).fetchone()
     if db_user is None:
         data_registro = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        cur.execute("INSERT INTO users (id, username, first_name, last_name, data_registro) VALUES (%s, %s, %s, %s, %s)",
+        conn.execute("INSERT INTO users (id, username, first_name, last_name, data_registro) VALUES (?, ?, ?, ?, ?)",
                        (user.id, user.username, user.first_name, user.last_name, data_registro))
         conn.commit()
-    cur.close()
     conn.close()
 
 def enviar_produto_telegram(user_id, nome_produto, link_produto):
@@ -113,8 +47,7 @@ def enviar_produto_telegram(user_id, nome_produto, link_produto):
     except requests.exceptions.RequestException as e:
         print(f"Erro ao enviar mensagem de entrega: {e}")
 
-# --- ROTAS FLASK E WEBHOOKS ADAPTADAS ---
-
+# --- WEBHOOKS E PAINEL ---
 @app.route(f"/{API_TOKEN}", methods=['POST'])
 def telegram_webhook():
     if request.headers.get('content-type') == 'application/json':
@@ -122,41 +55,47 @@ def telegram_webhook():
         update = types.Update.de_json(json_str)
         bot.process_new_updates([update])
         return '!', 200
-    return "Unsupported Media Type", 415
+    else:
+        return "Unsupported Media Type", 415
 
 @app.route('/webhook/mercado-pago', methods=['POST'])
 def webhook_mercado_pago():
     notification = request.json
-    if not (notification and notification.get('type') == 'payment'):
-        return jsonify({'status': 'ignored'}), 200
+    if notification and notification.get('type') == 'payment':
+        payment_id = notification['data']['id']
+        payment_info = pagamentos.verificar_status_pagamento(payment_id)
+        if payment_info and payment_info['status'] == 'approved':
+            venda_id = payment_info.get('external_reference')
+            if not venda_id: return jsonify({'status': 'ignored'}), 200
+            
+            conn = get_db_connection()
+            venda = conn.execute('SELECT * FROM vendas WHERE id = ? AND status = ?', (venda_id, 'pendente')).fetchone()
 
-    payment_id = notification['data']['id']
-    payment_info = pagamentos.verificar_status_pagamento(payment_id)
-    if not (payment_info and payment_info['status'] == 'approved'):
-        return jsonify({'status': 'not_approved'}), 200
+            if venda:
+                data_venda_dt = datetime.strptime(venda['data_venda'], '%Y-%m-%d %H:%M:%S')
+                if datetime.now() > data_venda_dt + timedelta(hours=1):
+                    print(f"Pagamento recebido para venda expirada (ID: {venda_id}). Ignorando entrega.")
+                    conn.execute('UPDATE vendas SET status = ? WHERE id = ?', ('expirado', venda_id))
+                    conn.commit()
+                    conn.close()
+                    return jsonify({'status': 'expired_and_ignored'}), 200
 
-    venda_id = payment_info.get('external_reference')
-    if not venda_id: return jsonify({'status': 'ignored'}), 200
+                payer_info = payment_info.get('payer', {})
+                payer_name = f"{payer_info.get('first_name', '')} {payer_info.get('last_name', '')}".strip()
+                payer_email = payer_info.get('email')
+                conn.execute('UPDATE vendas SET status = ?, payment_id = ?, payer_name = ?, payer_email = ? WHERE id = ?', 
+                             ('aprovado', payment_id, payer_name, payer_email, venda_id))
+                conn.commit()
+                produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (venda['produto_id'],)).fetchone()
+                conn.close()
+                if produto:
+                    enviar_produto_telegram(venda['user_id'], produto['nome'], produto['link'])
+                return jsonify({'status': 'success'}), 200
+            else:
+                conn.close()
+                return jsonify({'status': 'already_processed'}), 200
+    return jsonify({'status': 'ignored'}), 200
 
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT * FROM vendas WHERE id = %s AND status = %s', (venda_id, 'pendente'))
-    venda = cur.fetchone()
-
-    if venda:
-        payer_info = payment_info.get('payer', {})
-        payer_name = f"{payer_info.get('first_name', '')} {payer_info.get('last_name', '')}".strip()
-        payer_email = payer_info.get('email')
-        cur.execute('UPDATE vendas SET status = %s, payment_id = %s, payer_name = %s, payer_email = %s WHERE id = %s',
-                     ('aprovado', payment_id, payer_name, payer_email, venda_id))
-        conn.commit()
-        cur.execute('SELECT * FROM produtos WHERE id = %s', (venda['produto_id'],))
-        produto = cur.fetchone()
-        if produto:
-            enviar_produto_telegram(venda['user_id'], produto['nome'], produto['link'])
-    cur.close()
-    conn.close()
-    return jsonify({'status': 'success'}), 200
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -164,10 +103,7 @@ def login():
     if request.method == 'POST':
         username, password = request.form['username'], request.form['password']
         conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cur.execute('SELECT * FROM admin WHERE username = %s', (username,))
-        admin_user = cur.fetchone()
-        cur.close()
+        admin_user = conn.execute('SELECT * FROM admin WHERE username = ?', (username,)).fetchone()
         conn.close()
         if admin_user and check_password_hash(admin_user['password_hash'], password):
             session['logged_in'], session['username'] = True, admin_user['username']
@@ -184,68 +120,38 @@ def logout():
 
 @app.route('/')
 def index():
-    if not session.get('logged_in'): return redirect(url_for('login'))
+    if not session.get('logged_in'): return redirect(url_for('index'))
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    
-    cur.execute('SELECT COUNT(id) FROM users')
-    total_usuarios = cur.fetchone()[0]
-    
-    cur.execute('SELECT COUNT(id) FROM produtos')
-    total_produtos = cur.fetchone()[0]
-    
-    cur.execute("SELECT COUNT(id), SUM(preco) FROM vendas WHERE status = %s", ('aprovado',))
-    vendas_data = cur.fetchone()
+    total_usuarios = conn.execute('SELECT COUNT(id) FROM users').fetchone()[0]
+    total_produtos = conn.execute('SELECT COUNT(id) FROM produtos').fetchone()[0]
+    vendas_data = conn.execute("SELECT COUNT(id), SUM(preco) FROM vendas WHERE status = ?", ('aprovado',)).fetchone()
     total_vendas_aprovadas = vendas_data[0] or 0
     receita_total = vendas_data[1] or 0.0
-
-    cur.execute("""
-        SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, 
-               CASE 
-                   WHEN v.status = 'aprovado' THEN 'aprovado'
-                   WHEN v.status = 'pendente' AND (NOW() - INTERVAL '1 hour') > TO_TIMESTAMP(v.data_venda, 'YYYY-MM-DD HH24:MI:SS') THEN 'expirado'
-                   ELSE v.status 
-               END AS status
-        FROM vendas v
-        JOIN users u ON v.user_id = u.id
-        JOIN produtos p ON v.produto_id = p.id
-        ORDER BY v.id DESC LIMIT 5
-    """)
-    vendas_recentes = cur.fetchall()
-    
+    vendas_recentes = conn.execute("SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, CASE WHEN v.status = 'aprovado' THEN 'aprovado' WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-1 hour') > DATETIME(v.data_venda) THEN 'expirado' ELSE v.status END AS status FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id ORDER BY v.id DESC LIMIT 5").fetchall()
     chart_labels, chart_data = [], []
     today = datetime.now()
     for i in range(6, -1, -1):
         day = today - timedelta(days=i)
-        start_of_day_str = datetime.combine(day, time.min).strftime('%Y-%m-%d %H:%M:%S')
-        end_of_day_str = datetime.combine(day, time.max).strftime('%Y-%m-%d %H:%M:%S')
+        start_of_day, end_of_day = datetime.combine(day.date(), time.min), datetime.combine(day.date(), time.max)
         chart_labels.append(day.strftime('%d/%m'))
-        cur.execute("SELECT SUM(preco) FROM vendas WHERE status = 'aprovado' AND data_venda BETWEEN %s AND %s", (start_of_day_str, end_of_day_str))
-        daily_revenue = cur.fetchone()[0]
-        chart_data.append(float(daily_revenue or 0.0))
-        
-    cur.close()
+        daily_revenue = conn.execute("SELECT SUM(preco) FROM vendas WHERE status = 'aprovado' AND data_venda BETWEEN ? AND ?", (start_of_day, end_of_day)).fetchone()[0]
+        chart_data.append(daily_revenue or 0)
     conn.close()
-    
-    return render_template('index.html', total_vendas=total_vendas_aprovadas, total_usuarios=total_usuarios, total_produtos=total_produtos, receita_total=float(receita_total), vendas_recentes=vendas_recentes, chart_labels=json.dumps(chart_labels), chart_data=json.dumps(chart_data))
+    return render_template('index.html', total_vendas=total_vendas_aprovadas, total_usuarios=total_usuarios, total_produtos=total_produtos, receita_total=receita_total, vendas_recentes=vendas_recentes, chart_labels=json.dumps(chart_labels), chart_data=json.dumps(chart_data))
 
 @app.route('/produtos', methods=['GET', 'POST'])
 def produtos():
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     if not session.get('logged_in'): return redirect(url_for('login'))
     if request.method == 'POST':
         nome, preco, link = request.form['nome'], request.form['preco'], request.form['link']
-        cur.execute('INSERT INTO produtos (nome, preco, link) VALUES (%s, %s, %s)', (nome, preco, link))
+        conn = get_db_connection()
+        conn.execute('INSERT INTO produtos (nome, preco, link) VALUES (?, ?, ?)', (nome, preco, link))
         conn.commit()
-        flash('Produto adicionado com sucesso!', 'success')
-        cur.close()
         conn.close()
+        flash('Produto adicionado com sucesso!', 'success')
         return redirect(url_for('produtos'))
-
-    cur.execute('SELECT * FROM produtos ORDER BY id DESC')
-    lista_produtos = cur.fetchall()
-    cur.close()
+    conn = get_db_connection()
+    lista_produtos = conn.execute('SELECT * FROM produtos ORDER BY id DESC').fetchall()
     conn.close()
     return render_template('produtos.html', produtos=lista_produtos)
 
@@ -253,19 +159,14 @@ def produtos():
 def edit_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (id,)).fetchone()
     if request.method == 'POST':
         nome, preco, link = request.form['nome'], request.form['preco'], request.form['link']
-        cur.execute('UPDATE produtos SET nome = %s, preco = %s, link = %s WHERE id = %s', (nome, preco, link, id))
+        conn.execute('UPDATE produtos SET nome = ?, preco = ?, link = ? WHERE id = ?', (nome, preco, link, id))
         conn.commit()
-        flash('Produto atualizado com sucesso!', 'success')
-        cur.close()
         conn.close()
+        flash('Produto atualizado com sucesso!', 'success')
         return redirect(url_for('produtos'))
-
-    cur.execute('SELECT * FROM produtos WHERE id = %s', (id,))
-    produto = cur.fetchone()
-    cur.close()
     conn.close()
     return render_template('edit_product.html', produto=produto)
 
@@ -273,49 +174,28 @@ def edit_product(id):
 def remove_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('DELETE FROM produtos WHERE id = %s', (id,))
+    conn.execute('DELETE FROM produtos WHERE id = ?', (id,))
     conn.commit()
-    flash('Produto removido com sucesso!', 'danger')
-    cur.close()
     conn.close()
+    flash('Produto removido com sucesso!', 'danger')
     return redirect(url_for('produtos'))
 
 @app.route('/vendas')
 def vendas():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT id, nome FROM produtos ORDER BY nome')
-    produtos_disponiveis = cur.fetchall()
-    
-    query = """
-        SELECT T.* FROM (
-            SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, p.id as produto_id,
-                   CASE 
-                       WHEN v.status = 'aprovado' THEN 'aprovado'
-                       WHEN v.status = 'pendente' AND (NOW() - INTERVAL '1 hour') > TO_TIMESTAMP(v.data_venda, 'YYYY-MM-DD HH24:MI:SS') THEN 'expirado'
-                       ELSE v.status 
-                   END AS status
-            FROM vendas v
-            JOIN users u ON v.user_id = u.id
-            JOIN produtos p ON v.produto_id = p.id
-        ) AS T
-    """
+    produtos_disponiveis = conn.execute('SELECT id, nome FROM produtos ORDER BY nome').fetchall()
+    query_base = "SELECT T.* FROM (SELECT v.id, u.username, u.first_name, p.nome, v.preco, v.data_venda, p.id as produto_id, CASE WHEN v.status = 'aprovado' THEN 'aprovado' WHEN v.status = 'pendente' AND DATETIME('now', 'localtime', '-1 hour') > DATETIME(v.data_venda) THEN 'expirado' ELSE v.status END AS status FROM vendas v JOIN users u ON v.user_id = u.id JOIN produtos p ON v.produto_id = p.id) AS T"
     conditions, params = [], []
-    args = request.args
-    if args.get('data_inicio'): conditions.append("T.data_venda >= %s"); params.append(args.get('data_inicio'))
-    if args.get('data_fim'): conditions.append("T.data_venda <= %s"); params.append(args.get('data_fim') + ' 23:59:59')
-    if args.get('pesquisa'): conditions.append("(T.username LIKE %s OR T.nome LIKE %s OR T.first_name LIKE %s)"); params.extend(['%' + args.get('pesquisa') + '%'] * 3)
-    if args.get('produto_id'): conditions.append("T.produto_id = %s"); params.append(args.get('produto_id'))
-    if args.get('status'): conditions.append("T.status = %s"); params.append(args.get('status'))
-
-    if conditions: query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY T.id DESC"
-    
-    cur.execute(query, tuple(params))
-    lista_vendas = cur.fetchall()
-    cur.close()
+    data_inicio_str, data_fim_str, pesquisa_str, produto_id_str, status_str = (request.args.get('data_inicio'), request.args.get('data_fim'), request.args.get('pesquisa'), request.args.get('produto_id'), request.args.get('status'))
+    if data_inicio_str: conditions.append("DATE(T.data_venda) >= ?"); params.append(data_inicio_str)
+    if data_fim_str: conditions.append("DATE(T.data_venda) <= ?"); params.append(data_fim_str)
+    if pesquisa_str: conditions.append("(T.username LIKE ? OR T.nome LIKE ? OR T.first_name LIKE ?)"); params.extend([f'%{pesquisa_str}%'] * 3)
+    if produto_id_str: conditions.append("T.produto_id = ?"); params.append(produto_id_str)
+    if status_str: conditions.append("T.status = ?"); params.append(status_str)
+    if conditions: query_base += " WHERE " + " AND ".join(conditions)
+    query_base += " ORDER BY T.id DESC"
+    lista_vendas = conn.execute(query_base, tuple(params)).fetchall()
     conn.close()
     return render_template('vendas.html', vendas=lista_vendas, produtos_disponiveis=produtos_disponiveis)
 
@@ -323,10 +203,7 @@ def vendas():
 def venda_detalhes(id):
     if not session.get('logged_in'): return jsonify({'error': 'Unauthorized'}), 401
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT * FROM vendas WHERE id = %s', (id,))
-    venda = cur.fetchone()
-    cur.close()
+    venda = conn.execute('SELECT * FROM vendas WHERE id = ?', (id,)).fetchone()
     conn.close()
     if venda: return jsonify(dict(venda))
     return jsonify({'error': 'Not Found'}), 404
@@ -335,10 +212,7 @@ def venda_detalhes(id):
 def usuarios():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT * FROM users ORDER BY id DESC')
-    lista_usuarios = cur.fetchall()
-    cur.close()
+    lista_usuarios = conn.execute('SELECT * FROM users ORDER BY id DESC').fetchall()
     conn.close()
     return render_template('usuarios.html', usuarios=lista_usuarios)
 
@@ -346,15 +220,21 @@ def usuarios():
 def remove_user(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('DELETE FROM users WHERE id = %s', (id,))
+    conn.execute('DELETE FROM users WHERE id = ?', (id,))
     conn.commit()
-    flash('Usuário removido com sucesso!', 'danger')
-    cur.close()
     conn.close()
+    flash('Usuário removido com sucesso!', 'danger')
     return redirect(url_for('usuarios'))
 
-# --- BOT HANDLERS ADAPTADOS ---
+@app.route('/pagamento/<status>')
+def pagamento_retorno(status):
+    mensagem = "Status do Pagamento: "
+    if status == 'sucesso': mensagem += "Aprovado com sucesso!"
+    elif status == 'falha': mensagem += "Pagamento falhou."
+    elif status == 'pendente': mensagem += "Pagamento pendente."
+    return f"<div style='font-family: sans-serif; text-align: center; padding-top: 50px;'><h1>{mensagem}</h1><p>Você pode fechar esta janela e voltar para o Telegram.</p></div>"
+
+# --- COMANDOS DO BOT ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_or_register_user(message.from_user)
@@ -374,10 +254,7 @@ def callback_query(call):
 
 def mostrar_produtos(chat_id):
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT * FROM produtos')
-    produtos = cur.fetchall()
-    cur.close()
+    produtos = conn.execute('SELECT * FROM produtos').fetchall()
     conn.close()
     if not produtos:
         bot.send_message(chat_id, "Nenhum produto disponível.")
@@ -391,40 +268,45 @@ def mostrar_produtos(chat_id):
 def gerar_cobranca(call: types.CallbackQuery, produto_id: int):
     user_id, chat_id = call.from_user.id, call.message.chat.id
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute('SELECT * FROM produtos WHERE id = %s', (produto_id,))
-    produto = cur.fetchone()
+    produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (produto_id,)).fetchone()
     if not produto:
         bot.send_message(chat_id, "Produto não encontrado.")
-    else:
-        data_venda = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        cur.execute("INSERT INTO vendas (user_id, produto_id, preco, status, data_venda) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                       (user_id, produto_id, produto['preco'], 'pendente', data_venda))
-        venda_id = cur.fetchone()[0]
-        conn.commit()
-        pagamento = pagamentos.criar_pagamento_pix(produto=produto, user=call.from_user, venda_id=venda_id)
-        if pagamento and 'point_of_interaction' in pagamento:
-            qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
-            qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
-            qr_code_image = base64.b64decode(qr_code_base64)
-            bot.send_photo(chat_id, qr_code_image, caption=f"✅ PIX gerado para *{produto['nome']}*!")
-            bot.send_message(chat_id, f"```{qr_code_data}```", parse_mode='Markdown')
-            bot.send_message(chat_id, "Você receberá o produto aqui assim que o pagamento for confirmado.")
-        else:
-            bot.send_message(chat_id, "Ocorreu um erro ao gerar o PIX. Tente novamente.")
-            print(f"[ERRO] Falha ao gerar PIX. Resposta do MP: {pagamento}")
-    cur.close()
+        conn.close()
+        return
+    data_venda = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO vendas (user_id, produto_id, preco, status, data_venda) VALUES (?, ?, ?, ?, ?)",
+                   (user_id, produto_id, produto['preco'], 'pendente', data_venda))
+    conn.commit()
+    venda_id = cursor.lastrowid 
+    pagamento = pagamentos.criar_pagamento_pix(produto=produto, user=call.from_user, venda_id=venda_id)
     conn.close()
+    if pagamento and 'point_of_interaction' in pagamento:
+        qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
+        qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
+        qr_code_image = base64.b64decode(qr_code_base64)
+        
+        # --- MENSAGEM ATUALIZADA AQUI ---
+        caption_text = (
+            f"✅ PIX gerado para *{produto['nome']}*!\n\n"
+            "Escaneie o QR Code ou use o código abaixo:\n"
+            "_(Toque no código para copiar)_"
+        )
+        bot.send_photo(chat_id, qr_code_image, caption=caption_text, parse_mode='Markdown')
+        bot.send_message(chat_id, f"```{qr_code_data}```", parse_mode='Markdown')
+        bot.send_message(chat_id, "Você receberá o produto aqui assim que o pagamento for confirmado.")
+    else:
+        bot.send_message(chat_id, "Ocorreu um erro ao gerar o PIX. Tente novamente.")
+        print(f"[ERRO] Falha ao gerar PIX. Resposta do MP: {pagamento}")
 
 # --- INICIALIZAÇÃO FINAL ---
 if __name__ != '__main__':
     # Esta parte só é executada quando rodando na Render (produção)
-    init_db() # Cria as tabelas na primeira vez
     try:
         if API_TOKEN and BASE_URL:
             bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
             print("Webhook do Telegram configurado com sucesso!")
         else:
-            print("ERRO: Variáveis de ambiente não definidas.")
+            print("ERRO: Variáveis de ambiente API_TOKEN ou BASE_URL não definidas.")
     except Exception as e:
         print(f"Erro ao configurar o webhook do Telegram: {e}")
