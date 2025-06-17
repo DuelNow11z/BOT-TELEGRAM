@@ -10,6 +10,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import sqlite3 # Usado para o ambiente local
 
+
 # --- CONFIGURAÇÃO ---
 # Tenta importar as chaves do config.py para testes locais.
 # Se falhar (como na Render), usa as variáveis de ambiente.

@@ -1,20 +1,28 @@
 import mercadopago
-import config
+import os # Importa a biblioteca 'os' para ler variáveis de ambiente
 
-sdk = mercadopago.SDK(config.MERCADOPAGO_ACCESS_TOKEN)
+# --- CONFIGURAÇÃO ATUALIZADA ---
+# Lê as chaves diretamente das Variáveis de Ambiente da Render
+MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
+BASE_URL = os.getenv('BASE_URL')
 
-def criar_pagamento_pix(passe, user, venda_id):
+# Inicializa o SDK com o token lido do ambiente
+sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
+
+def criar_pagamento_pix(item, user, reference_id):
     """
-    Cria um pagamento PIX para a compra de um Passe de Acesso.
+    Cria um pagamento PIX para a compra de um Passe ou Produto.
+    'item' pode ser um dicionário de um passe ou de um produto.
+    'reference_id' é o ID da venda ou da assinatura.
     """
-    if not config.BASE_URL:
-        print("[ERRO] A variável BASE_URL não está definida em config.py.")
+    if not BASE_URL:
+        print("[ERRO] A variável de ambiente BASE_URL não está definida.")
         return None
         
-    notification_url = f"{config.BASE_URL}/webhook/mercado-pago"
+    notification_url = f"{BASE_URL}/webhook/mercado-pago"
     
     payment_data = {
-        'transaction_amount': float(passe['preco']),
+        'transaction_amount': float(item['preco']),
         'payment_method_id': 'pix',
         'payer': {
             'email': f"user_{user.id}@email.com",
@@ -22,8 +30,8 @@ def criar_pagamento_pix(passe, user, venda_id):
             'last_name': user.last_name or "Bot",
         },
         'notification_url': notification_url,
-        'external_reference': str(venda_id), # Usaremos o ID da assinatura
-        'description': f"Acesso: {passe['nome']}",
+        'external_reference': str(reference_id),
+        'description': f"Compra: {item['nome']}",
     }
 
     try:
@@ -34,6 +42,7 @@ def criar_pagamento_pix(passe, user, venda_id):
         return None
 
 def verificar_status_pagamento(payment_id):
+    """Verifica o status de um pagamento no Mercado Pago."""
     try:
         payment_info = sdk.payment().get(payment_id)
         return payment_info["response"]
