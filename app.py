@@ -18,7 +18,8 @@ BASE_URL = os.getenv('BASE_URL')
 DATABASE_URL = os.getenv('DATABASE_URL')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
 
-bot = telebot.TeleBot(API_TOKEN) if API_TOKEN else None
+# Inicialização com 'threaded=False', uma boa prática para ambientes como o da Render
+bot = telebot.TeleBot(API_TOKEN, threaded=False) if API_TOKEN else None
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'uma_chave_padrao_muito_segura')
 
@@ -35,7 +36,7 @@ def get_db_connection():
         return None
 
 def init_db():
-    """Cria as tabelas na base de dados externa se não existirem."""
+    # (código init_db sem alterações)
     conn = get_db_connection()
     if not conn: return
     cur = conn.cursor()
@@ -51,6 +52,7 @@ def init_db():
     print("Tabelas do banco de dados verificadas/criadas.")
 
 def get_or_register_user(user: types.User):
+    # (código get_or_register_user sem alterações)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT id FROM users WHERE id = %s", (user.id,))
@@ -64,13 +66,20 @@ def get_or_register_user(user: types.User):
 # --- WEBHOOKS ---
 @app.route(f"/{API_TOKEN}", methods=['POST'])
 def telegram_webhook():
+    print(">>> Webhook do Telegram recebido!") # LOG DE DEBUG
     if request.headers.get('content-type') == 'application/json':
         json_str = request.get_data().decode('utf-8')
         update = types.Update.de_json(json_str)
-        bot.process_new_updates([update])
+        print(f">>> Processando atualização: {update.update_id}") # LOG DE DEBUG
+        try:
+            bot.process_new_updates([update])
+        except Exception as e:
+            print(f">>> ERRO ao processar atualização: {e}") # LOG DE DEBUG
         return '!', 200
     return "Unsupported Media Type", 415
 
+# (O resto do seu código de webhooks e painel continua aqui, sem alterações)
+# ...
 @app.route('/webhook/mercado-pago', methods=['POST'])
 def webhook_mercado_pago():
     notification = request.json
@@ -80,16 +89,13 @@ def webhook_mercado_pago():
     if not (payment_info and payment_info['status'] == 'approved'): return jsonify({'status': 'not_approved'}), 200
     external_reference = payment_info.get('external_reference')
     if not external_reference: return jsonify({'status': 'ignored'}), 200
-
     if external_reference.startswith('venda_'):
         venda_id = int(external_reference.split('_')[1])
         processar_venda_produto(payment_id, venda_id)
     elif external_reference.startswith('assinatura_'):
         assinatura_id = int(external_reference.split('_')[1])
         processar_assinatura_passe(payment_id, assinatura_id)
-    
     return jsonify({'status': 'success'}), 200
-
 def processar_venda_produto(payment_id, venda_id):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -107,7 +113,6 @@ def processar_venda_produto(payment_id, venda_id):
         conn.commit()
     cur.close()
     conn.close()
-
 def processar_assinatura_passe(payment_id, assinatura_id):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -116,10 +121,8 @@ def processar_assinatura_passe(payment_id, assinatura_id):
     if assinatura:
         cur.execute('SELECT * FROM passes WHERE id = %s', (assinatura['pass_id'],))
         passe = cur.fetchone()
-        
         data_inicio = datetime.now()
         data_expiracao = data_inicio + timedelta(days=passe['duracao_dias'])
-        
         cur.execute('UPDATE assinaturas SET status = %s, payment_id = %s, data_inicio = %s, data_expiracao = %s WHERE id = %s',
                      ('ativo', payment_id, data_inicio, data_expiracao, assinatura_id))
         conn.commit()
@@ -132,8 +135,6 @@ def processar_assinatura_passe(payment_id, assinatura_id):
             bot.send_message(assinatura['user_id'], "Pagamento aprovado! Ocorreu um erro ao gerar o seu link de convite. Por favor, contacte o suporte.")
     cur.close()
     conn.close()
-
-# --- ROTAS DO PAINEL ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if 'logged_in' in session: return redirect(url_for('index'))
@@ -151,13 +152,11 @@ def login():
         else:
             flash('Utilizador ou senha inválidos.', 'danger')
     return render_template('login.html')
-
 @app.route('/logout')
 def logout():
     session.clear()
     flash('Sessão terminada com sucesso.', 'info')
     return redirect(url_for('login'))
-
 @app.route('/')
 def index():
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -174,7 +173,6 @@ def index():
     cur.close()
     conn.close()
     return render_template('index_hybrid.html', total_vendas=total_vendas, total_assinantes=total_assinantes, total_produtos=total_produtos, total_passes=total_passes)
-
 @app.route('/produtos', methods=['GET', 'POST'])
 def produtos():
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -185,15 +183,12 @@ def produtos():
         cur.execute('INSERT INTO produtos (nome, preco, link) VALUES (%s, %s, %s)', (nome, preco, link))
         conn.commit()
         flash('Produto criado com sucesso!', 'success')
-        cur.close()
-        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos ORDER BY id DESC')
     lista_produtos = cur.fetchall()
     cur.close()
     conn.close()
     return render_template('produtos.html', produtos=lista_produtos)
-
 @app.route('/edit_product/<int:id>', methods=['GET', 'POST'])
 def edit_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -204,28 +199,24 @@ def edit_product(id):
         cur.execute('UPDATE produtos SET nome = %s, preco = %s, link = %s WHERE id = %s', (nome, preco, link, id))
         conn.commit()
         flash('Produto atualizado com sucesso!', 'success')
-        cur.close()
-        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos WHERE id = %s', (id,))
     produto = cur.fetchone()
     cur.close()
     conn.close()
     return render_template('edit_product.html', produto=produto)
-    
 @app.route('/remove_product/<int:id>')
 def remove_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('DELETE FROM vendas WHERE produto_id = %s', (id,)) # Apaga as vendas associadas
-    cur.execute('DELETE FROM produtos WHERE id = %s', (id,)) # Apaga o produto
+    cur.execute('DELETE FROM vendas WHERE produto_id = %s', (id,))
+    cur.execute('DELETE FROM produtos WHERE id = %s', (id,))
     conn.commit()
     cur.close()
     conn.close()
     flash('Produto removido com sucesso!', 'danger')
     return redirect(url_for('produtos'))
-
 @app.route('/vendas')
 def vendas():
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -236,7 +227,6 @@ def vendas():
     cur.close()
     conn.close()
     return render_template('vendas.html', vendas=lista_vendas)
-
 @app.route('/passes', methods=['GET', 'POST'])
 def passes():
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -247,42 +237,30 @@ def passes():
         cur.execute('INSERT INTO passes (nome, preco, duracao_dias) VALUES (%s, %s, %s)', (nome, preco, duracao))
         conn.commit()
         flash('Passe de acesso criado com sucesso!', 'success')
-        cur.close()
-        conn.close()
         return redirect(url_for('passes'))
     cur.execute('SELECT * FROM passes ORDER BY duracao_dias')
     lista_passes = cur.fetchall()
     cur.close()
     conn.close()
     return render_template('passes.html', passes=lista_passes)
-    
 @app.route('/remove_pass/<int:id>')
 def remove_pass(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('DELETE FROM assinaturas WHERE pass_id = %s', (id,)) # Apaga as assinaturas associadas
-    cur.execute('DELETE FROM passes WHERE id = %s', (id,)) # Apaga o passe
+    cur.execute('DELETE FROM assinaturas WHERE pass_id = %s', (id,))
+    cur.execute('DELETE FROM passes WHERE id = %s', (id,))
     conn.commit()
     cur.close()
     conn.close()
     flash('Passe removido com sucesso!', 'danger')
     return redirect(url_for('passes'))
-
 @app.route('/assinantes')
 def assinantes():
     if not session.get('logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cur.execute("""
-        SELECT a.id, u.first_name, u.username, p.nome as passe_nome, a.data_expiracao,
-               CASE
-                   WHEN a.status = 'ativo' AND NOW() > a.data_expiracao THEN 'expirado'
-                   ELSE a.status
-               END as status
-        FROM assinaturas a JOIN users u ON a.user_id = u.id JOIN passes p ON a.pass_id = p.id
-        ORDER BY a.data_expiracao ASC
-    """)
+    cur.execute("SELECT a.id, u.first_name, u.username, p.nome as passe_nome, a.data_expiracao, CASE WHEN a.status = 'ativo' AND NOW() > a.data_expiracao THEN 'expirado' ELSE a.status END as status FROM assinaturas a JOIN users u ON a.user_id = u.id JOIN passes p ON a.pass_id = p.id ORDER BY a.data_expiracao ASC")
     lista_assinantes = cur.fetchall()
     cur.close()
     conn.close()
@@ -291,26 +269,35 @@ def assinantes():
 # --- COMANDOS DO BOT ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    get_or_register_user(message.from_user)
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_produtos = types.InlineKeyboardButton("🛍️ Comprar Produtos", callback_data='ver_produtos')
-    btn_passes = types.InlineKeyboardButton("🎟️ Obter Acesso VIP", callback_data='ver_passes')
-    markup.add(btn_produtos, btn_passes)
-    bot.reply_to(message, "Olá! Escolha uma opção para continuar:", reply_markup=markup)
+    print(f">>> Comando /start recebido do utilizador: {message.from_user.id}") # LOG DE DEBUG
+    try:
+        get_or_register_user(message.from_user)
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn_produtos = types.InlineKeyboardButton("🛍️ Comprar Produtos", callback_data='ver_produtos')
+        btn_passes = types.InlineKeyboardButton("🎟️ Obter Acesso VIP", callback_data='ver_passes')
+        markup.add(btn_produtos, btn_passes)
+        bot.reply_to(message, "Olá! Escolha uma opção para continuar:", reply_markup=markup)
+        print(">>> Resposta para /start enviada com sucesso.") # LOG DE DEBUG
+    except Exception as e:
+        print(f">>> ERRO em send_welcome: {e}") # LOG DE DEBUG
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    get_or_register_user(call.from_user)
-    if call.data == 'ver_produtos':
-        mostrar_produtos(call.message.chat.id)
-    elif call.data.startswith('comprar_produto_'):
-        produto_id = int(call.data.split('_')[2])
-        gerar_cobranca_produto(call, produto_id)
-    elif call.data == 'ver_passes':
-        mostrar_passes(call.message.chat.id)
-    elif call.data.startswith('comprar_passe_'):
-        pass_id = int(call.data.split('_')[2])
-        gerar_cobranca_passe(call, pass_id)
+    print(f">>> Callback query '{call.data}' recebida do utilizador: {call.from_user.id}") # LOG DE DEBUG
+    try:
+        get_or_register_user(call.from_user)
+        if call.data == 'ver_produtos':
+            mostrar_produtos(call.message.chat.id)
+        elif call.data.startswith('comprar_produto_'):
+            produto_id = int(call.data.split('_')[2])
+            gerar_cobranca_produto(call, produto_id)
+        elif call.data == 'ver_passes':
+            mostrar_passes(call.message.chat.id)
+        elif call.data.startswith('comprar_passe_'):
+            pass_id = int(call.data.split('_')[2])
+            gerar_cobranca_passe(call, pass_id)
+    except Exception as e:
+        print(f">>> ERRO em callback_query: {e}") # LOG DE DEBUG
 
 def mostrar_produtos(chat_id):
     conn = get_db_connection()
@@ -390,4 +377,3 @@ if __name__ != '__main__':
     init_db()
     if bot and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
-
