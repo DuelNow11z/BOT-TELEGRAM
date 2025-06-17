@@ -1,5 +1,8 @@
 import mercadopago
 import os
+# --- CORREÇÃO: Importa os módulos corretos para a versão atual da SDK ---
+import mercadopago.preapprovalplan
+import mercadopago.preapproval
 
 # Lê o token diretamente das variáveis de ambiente
 MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
@@ -10,6 +13,9 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     """
     Cria um plano de assinatura no Mercado Pago usando o método correto da SDK.
     """
+    # --- CORREÇÃO: Cria um cliente específico para planos de assinatura ---
+    plan_client = mercadopago.preapprovalplan.PreapprovalPlanClient(sdk)
+    
     plan_data = {
         "reason": nome_plano,
         "auto_recurring": {
@@ -22,8 +28,8 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     }
 
     try:
-        # --- CORREÇÃO: Acede ao cliente de planos diretamente pelo objeto sdk ---
-        plan_response = sdk.preapproval_plan().create(plan_data)
+        # Usa o cliente para criar o plano
+        plan_response = plan_client.create(plan_data)
         
         # A resposta de sucesso para esta API tem o status no corpo
         if plan_response and plan_response["status"] == 201:
@@ -43,6 +49,9 @@ def criar_link_assinatura(id_plano_mp, email_comprador):
     """
     Cria o link de checkout para um utilizador assinar um plano.
     """
+    # --- CORREÇÃO: Cria um cliente específico para assinaturas ---
+    preapproval_client = mercadopago.preapproval.PreapprovalClient(sdk)
+
     preapproval_data = {
         "preapproval_plan_id": id_plano_mp,
         "payer_email": email_comprador,
@@ -50,8 +59,8 @@ def criar_link_assinatura(id_plano_mp, email_comprador):
     }
 
     try:
-        # --- CORREÇÃO: Acede ao cliente de assinaturas diretamente pelo objeto sdk ---
-        preapproval_response = sdk.preapproval().create(preapproval_data)
+        # Usa o cliente para criar o link de assinatura
+        preapproval_response = preapproval_client.create(preapproval_data)
 
         if preapproval_response and preapproval_response["status"] == 201:
             # Retorna o link de checkout para o utilizador
