@@ -22,8 +22,9 @@ bot = telebot.TeleBot(API_TOKEN) if API_TOKEN else None
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'uma_chave_padrao_muito_segura')
 
-# --- LÓGICA DO BANCO DE DADOS POSTGRESQL ---
+# --- LÓGICA DO BANCO DE DADOS POSTGRESQL (EXTERNO) ---
 def get_db_connection():
+    """Conecta-se à base de dados externa PostgreSQL na Render."""
     try:
         up.uses_netloc.append("postgres")
         url = up.urlparse(DATABASE_URL)
@@ -34,6 +35,7 @@ def get_db_connection():
         return None
 
 def init_db():
+    """Cria as tabelas na base de dados externa se não existirem."""
     conn = get_db_connection()
     if not conn: return
     cur = conn.cursor()
@@ -183,6 +185,8 @@ def produtos():
         cur.execute('INSERT INTO produtos (nome, preco, link) VALUES (%s, %s, %s)', (nome, preco, link))
         conn.commit()
         flash('Produto criado com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos ORDER BY id DESC')
     lista_produtos = cur.fetchall()
@@ -200,12 +204,27 @@ def edit_product(id):
         cur.execute('UPDATE produtos SET nome = %s, preco = %s, link = %s WHERE id = %s', (nome, preco, link, id))
         conn.commit()
         flash('Produto atualizado com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos WHERE id = %s', (id,))
     produto = cur.fetchone()
     cur.close()
     conn.close()
     return render_template('edit_product.html', produto=produto)
+    
+@app.route('/remove_product/<int:id>')
+def remove_product(id):
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM vendas WHERE produto_id = %s', (id,)) # Apaga as vendas associadas
+    cur.execute('DELETE FROM produtos WHERE id = %s', (id,)) # Apaga o produto
+    conn.commit()
+    cur.close()
+    conn.close()
+    flash('Produto removido com sucesso!', 'danger')
+    return redirect(url_for('produtos'))
 
 @app.route('/vendas')
 def vendas():
@@ -228,12 +247,27 @@ def passes():
         cur.execute('INSERT INTO passes (nome, preco, duracao_dias) VALUES (%s, %s, %s)', (nome, preco, duracao))
         conn.commit()
         flash('Passe de acesso criado com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('passes'))
     cur.execute('SELECT * FROM passes ORDER BY duracao_dias')
     lista_passes = cur.fetchall()
     cur.close()
     conn.close()
     return render_template('passes.html', passes=lista_passes)
+    
+@app.route('/remove_pass/<int:id>')
+def remove_pass(id):
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM assinaturas WHERE pass_id = %s', (id,)) # Apaga as assinaturas associadas
+    cur.execute('DELETE FROM passes WHERE id = %s', (id,)) # Apaga o passe
+    conn.commit()
+    cur.close()
+    conn.close()
+    flash('Passe removido com sucesso!', 'danger')
+    return redirect(url_for('passes'))
 
 @app.route('/assinantes')
 def assinantes():
@@ -253,7 +287,6 @@ def assinantes():
     cur.close()
     conn.close()
     return render_template('assinantes.html', assinantes=lista_assinantes)
-
 
 # --- COMANDOS DO BOT ---
 @bot.message_handler(commands=['start'])
@@ -355,5 +388,6 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
 if __name__ != '__main__':
     # Só executa na Render
     init_db()
-    if API_TOKEN and BASE_URL:
+    if bot and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
+
