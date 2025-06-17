@@ -10,10 +10,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import sqlite3 # Usado para o ambiente local
 
-
 # --- CONFIGURAÇÃO ---
-# Tenta importar as chaves do config.py para testes locais.
-# Se falhar (como na Render), usa as variáveis de ambiente.
 IS_LOCAL = True
 try:
     import config
@@ -28,9 +25,7 @@ except ImportError:
     MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
     BASE_URL = os.getenv('BASE_URL')
     GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
-    # Na Render, o banco de dados pode estar num caminho persistente
     DB_NAME = os.path.join('/var/data/sqlite', 'bot_hybrid.db') if os.path.exists('/var/data/sqlite') else 'bot_hybrid.db'
-
 
 bot = telebot.TeleBot(API_TOKEN, threaded=False)
 app = Flask(__name__)
@@ -93,7 +88,7 @@ def webhook_mercado_pago():
         processar_venda_produto(payment_id, venda_id)
     elif external_reference.startswith('assinatura_'):
         assinatura_id = int(external_reference.split('_')[1])
-        processar_assinatura_passe(payment_id, assinatura_id, payment_info)
+        processar_assinatura_passe(payment_id, assinatura_id)
     
     return jsonify({'status': 'success'}), 200
 
@@ -113,7 +108,7 @@ def processar_venda_produto(payment_id, venda_id):
                 bot.send_message(venda['user_id'], f"✅ Pagamento aprovado!\n\nAqui está o seu link para *{produto['nome']}*:\n{produto['link']}", parse_mode='Markdown')
     conn.close()
 
-def processar_assinatura_passe(payment_id, assinatura_id, payment_info):
+def processar_assinatura_passe(payment_id, assinatura_id):
     conn = get_db_connection()
     assinatura = conn.execute('SELECT * FROM assinaturas WHERE id = ? AND status = ?', (assinatura_id, 'pendente')).fetchone()
     if assinatura:
@@ -137,23 +132,88 @@ def processar_assinatura_passe(payment_id, assinatura_id, payment_info):
     conn.close()
 
 # --- ROTAS DO PAINEL ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if 'logged_in' in session: return redirect(url_for('index'))
+    if request.method == 'POST':
+        username, password = request.form['username'], request.form['password']
+        conn = get_db_connection()
+        admin_user = conn.execute('SELECT * FROM admin WHERE username = ?', (username,)).fetchone()
+        conn.close()
+        if admin_user and check_password_hash(admin_user['password_hash'], password):
+            session['logged_in'], session['username'] = True, admin_user['username']
+            return redirect(url_for('index'))
+        else:
+            flash('Utilizador ou senha inválidos.', 'danger')
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('Sessão terminada com sucesso.', 'info')
+    return redirect(url_for('login'))
+
 @app.route('/')
 def index():
     if not session.get('logged_in'): return redirect(url_for('login'))
     # Lógica do dashboard para o modelo híbrido
-    return "Dashboard Híbrido em construção. Use as abas para gerir o seu negócio."
+    return render_template('index_hybrid.html') # Usaremos um novo template para o dashboard
 
-# ... (outras rotas do painel)
+@app.route('/produtos', methods=['GET', 'POST'])
+def produtos():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    if request.method == 'POST':
+        nome, preco, link = request.form['nome'], request.form['preco'], request.form['link']
+        conn.execute('INSERT INTO produtos (nome, preco, link) VALUES (?, ?, ?)', (nome, preco, link))
+        conn.commit()
+        flash('Produto criado com sucesso!', 'success')
+        return redirect(url_for('produtos'))
+    lista_produtos = conn.execute('SELECT * FROM produtos ORDER BY id DESC').fetchall()
+    conn.close()
+    return render_template('produtos.html', produtos=lista_produtos) # Template para gerir produtos
+
+@app.route('/vendas')
+def vendas():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    # Lógica para ver vendas de produtos
+    return "Página de Vendas de Produtos em construção."
+
+@app.route('/passes', methods=['GET', 'POST'])
+def passes():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    if request.method == 'POST':
+        nome, preco, duracao = request.form['nome'], request.form['preco'], request.form['duracao_dias']
+        conn.execute('INSERT INTO passes (nome, preco, duracao_dias) VALUES (?, ?, ?)', (nome, preco, duracao))
+        conn.commit()
+        flash('Passe de acesso criado com sucesso!', 'success')
+        return redirect(url_for('passes'))
+    lista_passes = conn.execute('SELECT * FROM passes ORDER BY duracao_dias').fetchall()
+    conn.close()
+    return render_template('passes.html', passes=lista_passes) # Novo template para gerir passes
+
+@app.route('/assinantes')
+def assinantes():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    lista_assinantes = conn.execute("""
+        SELECT a.id, u.first_name, u.username, p.nome as passe_nome, a.data_expiracao, a.status 
+        FROM assinaturas a JOIN users u ON a.user_id = u.id JOIN passes p ON a.pass_id = p.id
+        ORDER BY a.data_expiracao ASC
+    """).fetchall()
+    conn.close()
+    return render_template('assinantes.html', assinantes=lista_assinantes) # Novo template
 
 # --- COMANDOS DO BOT ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_or_register_user(message.from_user)
     markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_produtos = types.InlineKeyboardButton("🛍️ Comprar Produtos Digitais", callback_data='ver_produtos')
-    btn_passes = types.InlineKeyboardButton("🎟️ Aceder ao Grupo VIP", callback_data='ver_passes')
+    btn_produtos = types.InlineKeyboardButton("🛍️ Comprar Produtos", callback_data='ver_produtos')
+    btn_passes = types.InlineKeyboardButton("🎟️ Obter Acesso VIP", callback_data='ver_passes')
     markup.add(btn_produtos, btn_passes)
-    bot.reply_to(message, "Olá! O que deseja fazer?", reply_markup=markup)
+    bot.reply_to(message, "Olá! Escolha uma opção para continuar:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
@@ -174,7 +234,7 @@ def mostrar_produtos(chat_id):
     produtos = conn.execute('SELECT * FROM produtos').fetchall()
     conn.close()
     if not produtos:
-        bot.send_message(chat_id, "Nenhum produto digital disponível de momento.")
+        bot.send_message(chat_id, "Nenhum produto digital disponível.")
         return
     for produto in produtos:
         markup = types.InlineKeyboardMarkup()
@@ -183,29 +243,31 @@ def mostrar_produtos(chat_id):
         bot.send_message(chat_id, f"🛍️ *{produto['nome']}*\n*Preço:* R${produto['preco']:.2f}", parse_mode='Markdown', reply_markup=markup)
 
 def gerar_cobranca_produto(call: types.CallbackQuery, produto_id: int):
-    user_id, chat_id = call.from_user.id, call.message.chat.id
+    user, chat_id = call.from_user, call.message.chat.id
     conn = get_db_connection()
     produto = conn.execute('SELECT * FROM produtos WHERE id = ?', (produto_id,)).fetchone()
     if produto:
-        data_venda = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor = conn.cursor()
         cursor.execute("INSERT INTO vendas (user_id, produto_id, preco, status, data_venda) VALUES (?, ?, ?, ?, ?)",
-                       (user_id, produto_id, produto['preco'], 'pendente', data_venda))
+                       (user.id, produto_id, produto['preco'], 'pendente', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         venda_id = cursor.lastrowid
         conn.commit()
-        # A referência externa agora indica que é uma venda
-        pagamento = pagamentos.criar_pagamento_pix(produto, call.from_user, f"venda_{venda_id}")
+        pagamento = pagamentos.criar_pagamento_pix(produto, user, f"venda_{venda_id}")
         if pagamento and 'point_of_interaction' in pagamento:
             # Enviar QR Code e PIX
-            pass # Código omitido por brevidade
+            qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
+            qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
+            qr_code_image = base64.b64decode(qr_code_base64)
+            bot.send_photo(chat_id, qr_code_image, caption=f"✅ PIX gerado para *{produto['nome']}*!")
+            bot.send_message(chat_id, qr_code_data)
     conn.close()
 
 def mostrar_passes(chat_id):
     conn = get_db_connection()
-    passes = conn.execute('SELECT * FROM passes ORDER BY duracao_dias ASC').fetchall()
+    passes = conn.execute('SELECT * FROM passes ORDER BY duracao_dias').fetchall()
     conn.close()
     if not passes:
-        bot.send_message(chat_id, "Nenhum passe de acesso disponível de momento.")
+        bot.send_message(chat_id, "Nenhum passe de acesso disponível.")
         return
     for passe in passes:
         markup = types.InlineKeyboardMarkup()
@@ -218,13 +280,11 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
     conn = get_db_connection()
     passe = conn.execute('SELECT * FROM passes WHERE id = ?', (pass_id,)).fetchone()
     if passe:
-        data_inicio = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO assinaturas (user_id, pass_id, data_inicio, status) VALUES (?, ?, ?, ?)",
-                       (user.id, pass_id, data_inicio, 'pendente'))
+        cursor.execute("INSERT INTO assinaturas (user_id, pass_id, data_inicio, data_expiracao, status) VALUES (?, ?, ?, ?, ?)",
+                       (user.id, pass_id, datetime.now(), datetime.now(), 'pendente'))
         assinatura_id = cursor.lastrowid
         conn.commit()
-        # A referência externa agora indica que é uma assinatura
         pagamento = pagamentos.criar_pagamento_pix(passe, user, f"assinatura_{assinatura_id}")
         if pagamento and 'point_of_interaction' in pagamento:
             qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
@@ -234,13 +294,13 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
             bot.send_message(chat_id, qr_code_data)
     conn.close()
 
-
 # --- INICIALIZAÇÃO FINAL ---
-if not IS_LOCAL:
-    # Só executa na Render
+if __name__ == '__main__':
+    # Usado para testes locais
+    init_db()
+    app.run(host='0.0.0.0', port=5000, debug=True)
+else:
+    # Usado pela Render
     init_db()
     if API_TOKEN and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
-else:
-    # Só para testes locais
-    init_db()
