@@ -1,7 +1,5 @@
 import mercadopago
 import os
-# Importa os clientes específicos para planos e assinaturas
-from mercadopago.clients import preapproval_plan, preapproval
 
 # Lê o token diretamente das variáveis de ambiente
 MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
@@ -10,10 +8,10 @@ sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     """
-    Cria um plano de assinatura no Mercado Pago usando o cliente correto.
+    Cria um plano de assinatura no Mercado Pago usando o método correto da SDK.
     """
-    # Cria um cliente específico para planos de assinatura
-    plan_client = preapproval_plan.PreapprovalPlanClient(sdk)
+    # --- CORREÇÃO: Acessa o cliente de planos diretamente pelo objeto SDK ---
+    plan_client = mercadopago.preapproval_plan.PreapprovalPlanClient(sdk)
     
     plan_data = {
         "reason": nome_plano,
@@ -27,7 +25,6 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     }
 
     try:
-        # Usa o cliente para criar o plano
         plan_response = plan_client.create(plan_data)
         
         # A resposta de sucesso para esta API tem o status no corpo
@@ -45,8 +42,8 @@ def criar_link_assinatura(id_plano_mp, email_comprador):
     """
     Cria o link de checkout para um utilizador assinar um plano.
     """
-    # Cria um cliente específico para assinaturas
-    preapproval_client = preapproval.PreapprovalClient(sdk)
+    # --- CORREÇÃO: Acessa o cliente de assinaturas diretamente pelo objeto SDK ---
+    preapproval_client = mercadopago.preapproval.PreapprovalClient(sdk)
 
     preapproval_data = {
         "preapproval_plan_id": id_plano_mp,
@@ -55,7 +52,6 @@ def criar_link_assinatura(id_plano_mp, email_comprador):
     }
 
     try:
-        # Usa o cliente para criar o link de assinatura
         preapproval_response = preapproval_client.create(preapproval_data)
 
         if preapproval_response and preapproval_response.get("id"):
