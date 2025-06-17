@@ -1,22 +1,15 @@
 import mercadopago
 import os
-# --- CORREÇÃO: Importa os módulos específicos para planos e assinaturas ---
-import mercadopago.preapproval
-import mercadopago.preapproval_plan
 
 # Lê o token diretamente das variáveis de ambiente
 MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
-# Adicione o username do seu bot aqui para os links de retorno
-BOT_USERNAME = os.getenv('BOT_USERNAME', "seu_bot_aqui") 
+BOT_USERNAME = os.getenv('BOT_USERNAME', "seu_bot_aqui") # Ex: meusuperbot
 sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     """
     Cria um plano de assinatura no Mercado Pago usando o método correto da SDK.
     """
-    # Cria um cliente específico para planos de assinatura
-    plan_client = mercadopago.preapproval_plan.PreapprovalPlan(sdk)
-    
     plan_data = {
         "reason": nome_plano,
         "auto_recurring": {
@@ -29,11 +22,11 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
     }
 
     try:
-        # Usa o cliente para criar o plano
-        plan_response = plan_client.create(plan_data)
+        # --- CORREÇÃO: Acede ao cliente de planos diretamente pelo objeto sdk ---
+        plan_response = sdk.preapproval_plan().create(plan_data)
         
         # A resposta de sucesso para esta API tem o status no corpo
-        if plan_response and plan_response["status"] in [200, 201]:
+        if plan_response and plan_response["status"] == 201:
             print(f"Plano '{nome_plano}' criado com sucesso no Mercado Pago.")
             return plan_response.get("response")
         else:
@@ -41,15 +34,15 @@ def criar_plano_assinatura(nome_plano, valor, frequencia, intervalo):
             return None
     except Exception as e:
         print(f"Ocorreu uma exceção ao criar o plano: {e}")
+        # Tenta imprimir a resposta da API em caso de erro
+        if hasattr(e, 'response'):
+             print("Detalhes do erro do MP:", e.response)
         return None
 
 def criar_link_assinatura(id_plano_mp, email_comprador):
     """
     Cria o link de checkout para um utilizador assinar um plano.
     """
-    # Cria um cliente específico para assinaturas
-    preapproval_client = mercadopago.preapproval.Preapproval(sdk)
-
     preapproval_data = {
         "preapproval_plan_id": id_plano_mp,
         "payer_email": email_comprador,
@@ -57,10 +50,10 @@ def criar_link_assinatura(id_plano_mp, email_comprador):
     }
 
     try:
-        # Usa o cliente para criar o link de assinatura
-        preapproval_response = preapproval_client.create(preapproval_data)
+        # --- CORREÇÃO: Acede ao cliente de assinaturas diretamente pelo objeto sdk ---
+        preapproval_response = sdk.preapproval().create(preapproval_data)
 
-        if preapproval_response and preapproval_response["status"] in [200, 201]:
+        if preapproval_response and preapproval_response["status"] == 201:
             # Retorna o link de checkout para o utilizador
             return preapproval_response.get("response", {}).get("init_point")
         else:
@@ -68,4 +61,6 @@ def criar_link_assinatura(id_plano_mp, email_comprador):
             return None
     except Exception as e:
         print(f"Ocorreu uma exceção ao criar o link da assinatura: {e}")
+        if hasattr(e, 'response'):
+             print("Detalhes do erro do MP:", e.response)
         return None
