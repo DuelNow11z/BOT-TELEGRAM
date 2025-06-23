@@ -1,19 +1,15 @@
 import mercadopago
-import os # Importa a biblioteca 'os' para ler variáveis de ambiente
+import os
 
-# --- CONFIGURAÇÃO ATUALIZADA ---
-# Lê as chaves diretamente das Variáveis de Ambiente da Render
+# Lê as credenciais das variáveis de ambiente
 MERCADOPAGO_ACCESS_TOKEN = os.getenv('MERCADOPAGO_ACCESS_TOKEN')
 BASE_URL = os.getenv('BASE_URL')
-
-# Inicializa o SDK com o token lido do ambiente
 sdk = mercadopago.SDK(MERCADOPAGO_ACCESS_TOKEN)
 
 def criar_pagamento_pix(item, user, reference_id):
     """
-    Cria um pagamento PIX para a compra de um Passe ou Produto.
-    'item' pode ser um dicionário de um passe ou de um produto.
-    'reference_id' é o ID da venda ou da assinatura.
+    Cria um pagamento PIX. 'item' pode ser um produto ou um passe.
+    'reference_id' deve ser no formato 'venda_X' ou 'assinatura_Y'.
     """
     if not BASE_URL:
         print("[ERRO] A variável de ambiente BASE_URL não está definida.")
