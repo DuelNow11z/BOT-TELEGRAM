@@ -24,11 +24,13 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'uma_chave_super_secreta_e_longa'
 
 # --- LÓGICA DO BANCO DE DADOS (POSTGRESQL) ---
 def get_db_connection():
+    """Conecta-se à base de dados externa PostgreSQL na Render."""
     up.uses_netloc.append("postgres")
     url = up.urlparse(DATABASE_URL)
     return psycopg2.connect(database=url.path[1:], user=url.username, password=url.password, host=url.hostname, port=url.port)
 
 def init_db():
+    """Cria as tabelas na base de dados externa se não existirem."""
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DROP TABLE IF EXISTS vendas, assinaturas, produtos, passes, users, admin, configuracoes CASCADE;")
@@ -43,7 +45,7 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-    print("Tabelas do banco de dados (re)criadas com sucesso.")
+    print("Tabelas do banco de dados (re)criadas com sucesso, incluindo 'configuracoes'.")
 
 def get_or_register_user(user: types.User):
     conn = get_db_connection()
@@ -57,6 +59,7 @@ def get_or_register_user(user: types.User):
     conn.close()
 
 def get_payment_config():
+    """Busca as configurações de pagamento da base de dados."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("SELECT * FROM configuracoes WHERE id = 1")
@@ -107,8 +110,6 @@ def processar_venda_produto(payment_id, venda_id):
     cur.execute('SELECT * FROM vendas WHERE id = %s AND status = %s', (venda_id, 'pendente'))
     venda = cur.fetchone()
     if venda:
-        # A API do MP pode enviar notificações com atraso, então a verificação de expiração não é ideal aqui.
-        # Confiaremos que o webhook só é chamado para pagamentos válidos.
         cur.execute('UPDATE vendas SET status = %s, payment_id = %s WHERE id = %s', ('aprovado', payment_id, venda_id))
         conn.commit()
         cur.execute('SELECT * FROM produtos WHERE id = %s', (venda['produto_id'],))
@@ -208,6 +209,8 @@ def produtos():
         cur.execute('INSERT INTO produtos (nome, preco, link) VALUES (%s, %s, %s)', (nome, preco, link))
         conn.commit()
         flash('Produto criado com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos ORDER BY id DESC')
     lista_produtos = cur.fetchall()
@@ -225,13 +228,15 @@ def edit_product(id):
         cur.execute('UPDATE produtos SET nome = %s, preco = %s, link = %s WHERE id = %s', (nome, preco, link, id))
         conn.commit()
         flash('Produto atualizado com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos WHERE id = %s', (id,))
     produto = cur.fetchone()
     cur.close()
     conn.close()
     return render_template('edit_product.html', produto=produto)
-
+    
 @app.route('/remove_product/<int:id>')
 def remove_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -266,13 +271,15 @@ def passes():
         cur.execute('INSERT INTO passes (nome, preco, duracao_dias) VALUES (%s, %s, %s)', (nome, preco, duracao))
         conn.commit()
         flash('Passe de acesso criado com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('passes'))
     cur.execute('SELECT * FROM passes ORDER BY duracao_dias')
     lista_passes = cur.fetchall()
     cur.close()
     conn.close()
     return render_template('passes.html', passes=lista_passes)
-
+    
 @app.route('/remove_pass/<int:id>')
 def remove_pass(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -317,6 +324,7 @@ def configuracoes():
             conn.commit()
             flash('Configurações de pagamento guardadas com sucesso!', 'success')
         return redirect(url_for('configuracoes'))
+    
     cur.execute("SELECT * FROM configuracoes WHERE id = 1")
     config_data = cur.fetchone()
     cur.close()
