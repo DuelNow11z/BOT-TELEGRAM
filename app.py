@@ -3,7 +3,8 @@ import json
 import requests
 import telebot
 from telebot import types
-import pagamentos_subscriptions # Manteremos este, pode ser útil no futuro
+import base64
+# import pagamentos_subscriptions # Comentado temporariamente para garantir o deploy
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ import psycopg2.extras
 import urllib.parse as up
 
 # --- CONFIGURAÇÃO ---
-API_TOKEN = os.getenv('API_TOKEN') # O SEU token de super admin, se necessário
+API_TOKEN = os.getenv('API_TOKEN')
 BASE_URL = os.getenv('BASE_URL')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -26,27 +27,38 @@ def get_db_connection():
     return psycopg2.connect(database=url.path[1:], user=url.username, password=url.password, host=url.hostname, port=url.port)
 
 def init_db():
-    # Este script é executado pelo ficheiro db_init_multitenant.py
-    # Mantemos a função aqui para referência, mas não a chamaremos no arranque
-    pass
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS tenants (
+            id SERIAL PRIMARY KEY, nome_negocio TEXT NOT NULL, telegram_bot_token TEXT UNIQUE,
+            telegram_group_id TEXT, gateway_provider TEXT, gateway_credentials TEXT,
+            licenca_ativa BOOLEAN DEFAULT TRUE, licenca_expira_em DATE
+        );
+    ''')
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS admins (
+            id SERIAL PRIMARY KEY, tenant_id INTEGER NOT NULL, username TEXT NOT NULL,
+            password_hash TEXT NOT NULL, is_super_admin BOOLEAN DEFAULT FALSE,
+            UNIQUE(tenant_id, username), FOREIGN KEY(tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+        );
+    ''')
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Tabelas do banco de dados verificadas/criadas.")
 
 # --- ROTAS DE SUPER ADMIN ---
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if 'super_admin_logged_in' in session:
-        return redirect(url_for('super_dashboard'))
-    
+    if 'super_admin_logged_in' in session: return redirect(url_for('super_dashboard'))
     if request.method == 'POST':
-        # Por agora, o login de super admin será fixo.
-        # No futuro, podemos criar um utilizador super admin na base de dados.
         if request.form['username'] == 'superadmin' and request.form['password'] == os.getenv('SUPER_ADMIN_PASSWORD', 'admin123'):
             session['super_admin_logged_in'] = True
             flash('Login de Super Admin realizado com sucesso!', 'success')
             return redirect(url_for('super_dashboard'))
         else:
             flash('Credenciais de Super Admin inválidas.', 'danger')
-            
     return render_template('login.html')
 
 @app.route('/logout')
@@ -58,9 +70,7 @@ def logout():
 @app.route('/')
 @app.route('/super/dashboard')
 def super_dashboard():
-    if not session.get('super_admin_logged_in'):
-        return redirect(url_for('login'))
-        
+    if not session.get('super_admin_logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("SELECT * FROM tenants ORDER BY id DESC")
@@ -71,20 +81,20 @@ def super_dashboard():
 
 @app.route('/super/tenant/add', methods=['GET', 'POST'])
 def add_tenant():
-    if not session.get('super_admin_logged_in'):
-        return redirect(url_for('login'))
-    
+    if not session.get('super_admin_logged_in'): return redirect(url_for('login'))
     if request.method == 'POST':
         nome_negocio = request.form['nome_negocio']
         telegram_token = request.form['telegram_bot_token']
-        mp_credentials = request.form['gateway_credentials'] # Provisório
+        mp_credentials = request.form['gateway_credentials']
         dias_licenca = int(request.form['dias_licenca'])
-        
         data_expiracao = datetime.now().date() + timedelta(days=dias_licenca)
         
         conn = get_db_connection()
         cur = conn.cursor()
         try:
+            # --- LÓGICA DE CRIAÇÃO DE PLANO NO MP REMOVIDA TEMPORARIAMENTE ---
+            # plano_mp = pagamentos_subscriptions.criar_plano_assinatura(...)
+            
             cur.execute(
                 "INSERT INTO tenants (nome_negocio, telegram_bot_token, gateway_credentials, licenca_expira_em, licenca_ativa) VALUES (%s, %s, %s, %s, %s)",
                 (nome_negocio, telegram_token, mp_credentials, data_expiracao, True)
@@ -98,19 +108,14 @@ def add_tenant():
         finally:
             cur.close()
             conn.close()
-            
         return redirect(url_for('super_dashboard'))
-        
     return render_template('tenant_form.html', form_title="Adicionar Novo Cliente (Tenant)")
 
 @app.route('/super/tenant/edit/<int:id>', methods=['GET', 'POST'])
 def edit_tenant(id):
-    if not session.get('super_admin_logged_in'):
-        return redirect(url_for('login'))
-
+    if not session.get('super_admin_logged_in'): return redirect(url_for('login'))
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    
     if request.method == 'POST':
         nome_negocio = request.form['nome_negocio']
         telegram_token = request.form['telegram_bot_token']
@@ -132,9 +137,10 @@ def edit_tenant(id):
     tenant = cur.fetchone()
     cur.close()
     conn.close()
-    
     return render_template('tenant_form.html', form_title=f"Editar Cliente: {tenant['nome_negocio']}", tenant=tenant)
 
-# A lógica do bot e dos webhooks será reimplementada aqui futuramente
-# para conseguir lidar com múltiplos tenants.
-# Por agora, focamo-nos no painel de gestão.
+# --- INICIALIZAÇÃO FINAL ---
+if __name__ != '__main__':
+    print("Aplicação a iniciar em modo de produção...")
+    init_db()
+
