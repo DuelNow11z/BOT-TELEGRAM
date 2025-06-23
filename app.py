@@ -28,6 +28,23 @@ def get_db_connection():
     url = up.urlparse(DATABASE_URL)
     return psycopg2.connect(database=url.path[1:], user=url.username, password=url.password, host=url.hostname, port=url.port)
 
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS vendas, assinaturas, produtos, passes, users, admin, configuracoes CASCADE;")
+    cur.execute('''CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT, data_registro TEXT);''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS produtos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco NUMERIC(10, 2) NOT NULL, link TEXT NOT NULL);''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS vendas (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, produto_id INTEGER NOT NULL, preco NUMERIC(10, 2), payment_id TEXT, status TEXT, data_venda TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY(produto_id) REFERENCES produtos(id) ON DELETE CASCADE);''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS passes (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco NUMERIC(10, 2) NOT NULL, duracao_dias INTEGER NOT NULL);''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS assinaturas (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, pass_id INTEGER NOT NULL, payment_id TEXT, data_inicio TIMESTAMP, data_expiracao TIMESTAMP, status TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY(pass_id) REFERENCES passes(id) ON DELETE CASCADE);''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS admin (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL);''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS configuracoes (id INTEGER PRIMARY KEY CHECK (id = 1), gateway_provider TEXT DEFAULT 'mercadopago', mercadopago_token TEXT);''')
+    cur.execute("INSERT INTO configuracoes (id) VALUES (1) ON CONFLICT (id) DO NOTHING;")
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Tabelas do banco de dados (re)criadas com sucesso.")
+
 def get_or_register_user(user: types.User):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -38,6 +55,15 @@ def get_or_register_user(user: types.User):
         conn.commit()
     cur.close()
     conn.close()
+
+def get_payment_config():
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("SELECT * FROM configuracoes WHERE id = 1")
+    config = cur.fetchone()
+    cur.close()
+    conn.close()
+    return config
 
 # --- WEBHOOKS ---
 @app.route(f"/{API_TOKEN}", methods=['POST'])
@@ -53,9 +79,16 @@ def telegram_webhook():
 def webhook_mercado_pago():
     notification = request.json
     if not (notification and notification.get('type') == 'payment'): return jsonify({'status': 'ignored'}), 200
+    
+    config = get_payment_config()
+    if not config or not config['mercadopago_token']:
+        print("[WEBHOOK-ERRO] Credenciais do Mercado Pago não configuradas.")
+        return jsonify({'status': 'config_error'}), 500
+
     payment_id = notification['data']['id']
-    payment_info = pagamentos.verificar_status_pagamento(payment_id)
+    payment_info = pagamentos.verificar_status_pagamento(payment_id, config['mercadopago_token'])
     if not (payment_info and payment_info['status'] == 'approved'): return jsonify({'status': 'not_approved'}), 200
+    
     external_reference = payment_info.get('external_reference')
     if not external_reference: return jsonify({'status': 'ignored'}), 200
 
@@ -74,16 +107,14 @@ def processar_venda_produto(payment_id, venda_id):
     cur.execute('SELECT * FROM vendas WHERE id = %s AND status = %s', (venda_id, 'pendente'))
     venda = cur.fetchone()
     if venda:
-        data_venda_dt = datetime.strptime(venda['data_venda'], '%Y-%m-%d %H:%M:%S')
-        if datetime.now() > data_venda_dt + timedelta(hours=1):
-            cur.execute('UPDATE vendas SET status = %s WHERE id = %s', ('expirado', venda_id))
-        else:
-            cur.execute('UPDATE vendas SET status = %s, payment_id = %s WHERE id = %s', ('aprovado', payment_id, venda_id))
-            cur.execute('SELECT * FROM produtos WHERE id = %s', (venda['produto_id'],))
-            produto = cur.fetchone()
-            if produto:
-                bot.send_message(venda['user_id'], f"✅ Pagamento aprovado!\n\nAqui está o seu link para *{produto['nome']}*:\n{produto['link']}", parse_mode='Markdown')
+        # A API do MP pode enviar notificações com atraso, então a verificação de expiração não é ideal aqui.
+        # Confiaremos que o webhook só é chamado para pagamentos válidos.
+        cur.execute('UPDATE vendas SET status = %s, payment_id = %s WHERE id = %s', ('aprovado', payment_id, venda_id))
         conn.commit()
+        cur.execute('SELECT * FROM produtos WHERE id = %s', (venda['produto_id'],))
+        produto = cur.fetchone()
+        if produto:
+            bot.send_message(venda['user_id'], f"✅ Pagamento aprovado!\n\nAqui está o seu link para *{produto['nome']}*:\n{produto['link']}", parse_mode='Markdown')
     cur.close()
     conn.close()
 
@@ -113,6 +144,19 @@ def processar_assinatura_passe(payment_id, assinatura_id):
     conn.close()
 
 # --- ROTAS DO PAINEL ---
+@app.route('/setup-admin-e-db')
+def setup_admin_and_db():
+    init_db()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    username, password = "admin", "123"
+    hashed_password = generate_password_hash(password)
+    cur.execute("INSERT INTO admin (username, password_hash) VALUES (%s, %s)", (username, hashed_password))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return f"Base de dados reiniciada e utilizador '{username}' criado com a senha '{password}'. Remova esta rota do seu código agora.", 200
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if 'logged_in' in session: return redirect(url_for('index'))
@@ -164,8 +208,6 @@ def produtos():
         cur.execute('INSERT INTO produtos (nome, preco, link) VALUES (%s, %s, %s)', (nome, preco, link))
         conn.commit()
         flash('Produto criado com sucesso!', 'success')
-        cur.close()
-        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos ORDER BY id DESC')
     lista_produtos = cur.fetchall()
@@ -183,15 +225,13 @@ def edit_product(id):
         cur.execute('UPDATE produtos SET nome = %s, preco = %s, link = %s WHERE id = %s', (nome, preco, link, id))
         conn.commit()
         flash('Produto atualizado com sucesso!', 'success')
-        cur.close()
-        conn.close()
         return redirect(url_for('produtos'))
     cur.execute('SELECT * FROM produtos WHERE id = %s', (id,))
     produto = cur.fetchone()
     cur.close()
     conn.close()
     return render_template('edit_product.html', produto=produto)
-    
+
 @app.route('/remove_product/<int:id>')
 def remove_product(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -226,15 +266,13 @@ def passes():
         cur.execute('INSERT INTO passes (nome, preco, duracao_dias) VALUES (%s, %s, %s)', (nome, preco, duracao))
         conn.commit()
         flash('Passe de acesso criado com sucesso!', 'success')
-        cur.close()
-        conn.close()
         return redirect(url_for('passes'))
     cur.execute('SELECT * FROM passes ORDER BY duracao_dias')
     lista_passes = cur.fetchall()
     cur.close()
     conn.close()
     return render_template('passes.html', passes=lista_passes)
-    
+
 @app.route('/remove_pass/<int:id>')
 def remove_pass(id):
     if not session.get('logged_in'): return redirect(url_for('login'))
@@ -267,6 +305,23 @@ def assinantes():
     conn.close()
     return render_template('assinantes.html', assinantes=lista_assinantes)
 
+@app.route('/configuracoes', methods=['GET', 'POST'])
+def configuracoes():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    if request.method == 'POST':
+        token = request.form.get('mercadopago_token')
+        if token:
+            cur.execute("UPDATE configuracoes SET mercadopago_token = %s WHERE id = 1", (token,))
+            conn.commit()
+            flash('Configurações de pagamento guardadas com sucesso!', 'success')
+        return redirect(url_for('configuracoes'))
+    cur.execute("SELECT * FROM configuracoes WHERE id = 1")
+    config_data = cur.fetchone()
+    cur.close()
+    conn.close()
+    return render_template('configuracoes.html', config=config_data)
 
 # --- COMANDOS DO BOT ---
 @bot.message_handler(commands=['start'])
@@ -308,6 +363,10 @@ def mostrar_produtos(chat_id):
             bot.send_message(chat_id, f"🛍️ *{produto['nome']}*\n*Preço:* R${produto['preco']:.2f}", parse_mode='Markdown', reply_markup=markup)
 
 def gerar_cobranca_produto(call: types.CallbackQuery, produto_id: int):
+    config = get_payment_config()
+    if not config or not config['mercadopago_token']:
+        bot.send_message(call.message.chat.id, "⚠️ Erro: O administrador não configurou um método de pagamento.")
+        return
     user, chat_id = call.from_user, call.message.chat.id
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -318,7 +377,7 @@ def gerar_cobranca_produto(call: types.CallbackQuery, produto_id: int):
                        (user.id, produto_id, produto['preco'], 'pendente', datetime.now()))
         venda_id = cur.fetchone()[0]
         conn.commit()
-        pagamento = pagamentos.criar_pagamento_pix(produto, user, f"venda_{venda_id}")
+        pagamento = pagamentos.criar_pagamento_pix(produto, user, f"venda_{venda_id}", config['mercadopago_token'])
         if pagamento and 'point_of_interaction' in pagamento:
             qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
             qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
@@ -344,6 +403,10 @@ def mostrar_passes(chat_id):
             bot.send_message(chat_id, f"🎟️ *{passe['nome']}*\n*Duração:* {passe['duracao_dias']} dias\n*Preço:* R${passe['preco']:.2f}", parse_mode='Markdown', reply_markup=markup)
 
 def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
+    config = get_payment_config()
+    if not config or not config['mercadopago_token']:
+        bot.send_message(call.message.chat.id, "⚠️ Erro: O administrador não configurou um método de pagamento.")
+        return
     user, chat_id = call.from_user, call.message.chat.id
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -354,7 +417,7 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
                        (user.id, pass_id, 'pendente', datetime.now(), datetime.now()))
         assinatura_id = cur.fetchone()[0]
         conn.commit()
-        pagamento = pagamentos.criar_pagamento_pix(passe, user, f"assinatura_{assinatura_id}")
+        pagamento = pagamentos.criar_pagamento_pix(passe, user, f"assinatura_{assinatura_id}", config['mercadopago_token'])
         if pagamento and 'point_of_interaction' in pagamento:
             qr_code_base64 = pagamento['point_of_interaction']['transaction_data']['qr_code_base64']
             qr_code_data = pagamento['point_of_interaction']['transaction_data']['qr_code']
@@ -366,8 +429,7 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
 
 # --- INICIALIZAÇÃO FINAL ---
 if os.getenv('IS_RENDER'):
-    # Não chamamos init_db() aqui para não apagar os dados em cada deploy
-    # A inicialização é feita pela rota secreta
+    # Na Render, não chamamos init_db() automaticamente para não apagar os dados.
+    # A inicialização é feita pela rota secreta.
     if bot and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
-

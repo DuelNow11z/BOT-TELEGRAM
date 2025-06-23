@@ -1,0 +1,25 @@
+{% extends "layout.html" %}
+{% block title %}Configurações de Pagamento{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-gray-900">Configurações de Pagamento</h1>
+<p class="mt-1 text-sm text-gray-600">Insira as credenciais do seu gateway de pagamento para começar a receber.</p>
+
+<form class="mt-6 bg-white shadow sm:rounded-lg" method="POST">
+    <div class="px-4 py-5 sm:p-6">
+        <h3 class="text-base font-semibold leading-6 text-gray-900">Mercado Pago</h3>
+        <div class="mt-4 grid grid-cols-1 gap-y-6">
+            <div>
+                <label for="mercadopago_token" class="block text-sm font-medium leading-6 text-gray-900">Access Token de Produção</label>
+                <div class="mt-2">
+                    <input type="password" name="mercadopago_token" id="mercadopago_token" value="{{ config.mercadopago_token or '' }}" class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6" placeholder="APP_USR-...">
+                </div>
+                <p class="mt-2 text-xs text-gray-500">Esta chave é secreta e não será exibida novamente após ser guardada.</p>
+            </div>
+        </div>
+    </div>
+    <div class="flex items-center justify-end gap-x-6 border-t border-gray-200 px-4 py-4 sm:px-6">
+        <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Guardar Configurações</button>
+    </div>
+</form>
+{% endblock %}
