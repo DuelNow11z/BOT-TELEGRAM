@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="bg-white rounded-lg shadow">
+    <div class="px-4 py-5 sm:p-6 flex justify-between items-center">
+        <h2 class="text-xl font-semibold text-gray-900">Clientes (Tenants)</h2>
+        <a href="{{ url_for('add_tenant') }}" class="inline-flex items-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700">Adicionar Cliente</a>
+    </div>
+    <div class="border-t border-gray-200">
+        <table class="min-w-full divide-y divide-gray-300">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900">Nome do Negócio</th>
+                    <th class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Licença Expira em</th>
+                    <th class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Status</th>
+                    <th class="relative py-3.5 pl-3 pr-4"><span class="sr-only">Editar</span></th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 bg-white">
+                {% for tenant in tenants %}
+                <tr>
+                    <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900">{{ tenant.nome_negocio }}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">{{ tenant.licenca_expira_em.strftime('%d/%m/%Y') }}</td>
+                    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                        {% if tenant.licenca_ativa %}
+                            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">Ativa</span>
+                        {% else %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">Inativa</span>
+                        {% endif %}
+                    </td>
+                    <td class="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium">
+                        <a href="{{ url_for('edit_tenant', id=tenant.id) }}" class="text-indigo-600 hover:text-indigo-900">Editar</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
