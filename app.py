@@ -28,21 +28,6 @@ def get_db_connection():
     url = up.urlparse(DATABASE_URL)
     return psycopg2.connect(database=url.path[1:], user=url.username, password=url.password, host=url.hostname, port=url.port)
 
-def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DROP TABLE IF EXISTS vendas, assinaturas, produtos, passes, users, admin CASCADE;")
-    cur.execute('''CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT, data_registro TEXT);''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS produtos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco NUMERIC(10, 2) NOT NULL, link TEXT NOT NULL);''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS vendas (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, produto_id INTEGER NOT NULL, preco NUMERIC(10, 2), payment_id TEXT, status TEXT, data_venda TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY(produto_id) REFERENCES produtos(id) ON DELETE CASCADE);''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS passes (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco NUMERIC(10, 2) NOT NULL, duracao_dias INTEGER NOT NULL);''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS assinaturas (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, pass_id INTEGER NOT NULL, payment_id TEXT, data_inicio TIMESTAMP, data_expiracao TIMESTAMP, status TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY(pass_id) REFERENCES passes(id) ON DELETE CASCADE);''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS admin (id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL);''')
-    conn.commit()
-    cur.close()
-    conn.close()
-    print("Tabelas do banco de dados (re)criadas com sucesso.")
-
 def get_or_register_user(user: types.User):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -89,12 +74,16 @@ def processar_venda_produto(payment_id, venda_id):
     cur.execute('SELECT * FROM vendas WHERE id = %s AND status = %s', (venda_id, 'pendente'))
     venda = cur.fetchone()
     if venda:
-        cur.execute('UPDATE vendas SET status = %s, payment_id = %s WHERE id = %s', ('aprovado', payment_id, venda_id))
+        data_venda_dt = datetime.strptime(venda['data_venda'], '%Y-%m-%d %H:%M:%S')
+        if datetime.now() > data_venda_dt + timedelta(hours=1):
+            cur.execute('UPDATE vendas SET status = %s WHERE id = %s', ('expirado', venda_id))
+        else:
+            cur.execute('UPDATE vendas SET status = %s, payment_id = %s WHERE id = %s', ('aprovado', payment_id, venda_id))
+            cur.execute('SELECT * FROM produtos WHERE id = %s', (venda['produto_id'],))
+            produto = cur.fetchone()
+            if produto:
+                bot.send_message(venda['user_id'], f"✅ Pagamento aprovado!\n\nAqui está o seu link para *{produto['nome']}*:\n{produto['link']}", parse_mode='Markdown')
         conn.commit()
-        cur.execute('SELECT * FROM produtos WHERE id = %s', (venda['produto_id'],))
-        produto = cur.fetchone()
-        if produto:
-            bot.send_message(venda['user_id'], f"✅ Pagamento aprovado!\n\nAqui está o seu link para *{produto['nome']}*:\n{produto['link']}", parse_mode='Markdown')
     cur.close()
     conn.close()
 
@@ -106,8 +95,10 @@ def processar_assinatura_passe(payment_id, assinatura_id):
     if assinatura:
         cur.execute('SELECT * FROM passes WHERE id = %s', (assinatura['pass_id'],))
         passe = cur.fetchone()
+        
         data_inicio = datetime.now()
         data_expiracao = data_inicio + timedelta(days=passe['duracao_dias'])
+        
         cur.execute('UPDATE assinaturas SET status = %s, payment_id = %s, data_inicio = %s, data_expiracao = %s WHERE id = %s',
                      ('ativo', payment_id, data_inicio, data_expiracao, assinatura_id))
         conn.commit()
@@ -117,25 +108,11 @@ def processar_assinatura_passe(payment_id, assinatura_id):
             bot.send_message(assinatura['user_id'], f"✅ Pagamento aprovado! O seu acesso ao grupo VIP é válido até {data_expiracao.strftime('%d/%m/%Y')}.\n\nUse este link de convite único para entrar:\n{link}")
         except Exception as e:
             print(f"Erro ao criar link de convite: {e}")
-            bot.send_message(assinatura['user_id'], "Pagamento aprovado! Ocorreu um erro ao gerar o seu link. Por favor, contacte o suporte.")
+            bot.send_message(assinatura['user_id'], "Pagamento aprovado! Ocorreu um erro ao gerar o seu link de convite. Por favor, contacte o suporte.")
     cur.close()
     conn.close()
 
 # --- ROTAS DO PAINEL ---
-@app.route('/setup-admin-e-db')
-def setup_admin_and_db():
-    init_db() # Reinicia a base de dados
-    conn = get_db_connection()
-    cur = conn.cursor()
-    username = "admin"
-    password = "123" # Senha provisória
-    hashed_password = generate_password_hash(password)
-    cur.execute("INSERT INTO admin (username, password_hash) VALUES (%s, %s)", (username, hashed_password))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return f"Base de dados reiniciada e utilizador '{username}' criado com a senha '{password}'. Remova esta rota do seu código agora.", 200
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if 'logged_in' in session: return redirect(url_for('index'))
@@ -290,6 +267,7 @@ def assinantes():
     conn.close()
     return render_template('assinantes.html', assinantes=lista_assinantes)
 
+
 # --- COMANDOS DO BOT ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -388,6 +366,8 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
 
 # --- INICIALIZAÇÃO FINAL ---
 if os.getenv('IS_RENDER'):
-    init_db()
+    # Não chamamos init_db() aqui para não apagar os dados em cada deploy
+    # A inicialização é feita pela rota secreta
     if bot and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
+
