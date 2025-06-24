@@ -10,38 +10,17 @@
 </head>
 <body class="h-full">
 <div class="min-h-full">
-    <!-- Navbar (simplificada por agora) -->
     <nav class="bg-white shadow-sm">
-        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div class="flex h-16 justify-between">
-                <div class="flex">
-                    <div class="flex flex-shrink-0 items-center">
-                        <h1 class="text-xl font-bold text-gray-800">Gestor</h1>
-                    </div>
-                </div>
-                {% if session.logged_in %}
-                <div class="flex items-center">
-                    <a href="{{ url_for('logout') }}" class="text-sm font-medium text-gray-600 hover:text-gray-900">Sair</a>
-                </div>
-                {% endif %}
-            </div>
-        </div>
+        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8"><div class="flex h-16 justify-between"><div class="flex"><div class="flex flex-shrink-0 items-center"><h1 class="text-xl font-bold text-gray-800">Gestor de Comunidades</h1></div></div>
+        {% if session.logged_in %}<div class="flex items-center"><a href="{{ url_for('logout') }}" class="text-sm font-medium text-gray-600 hover:text-gray-900">Sair</a></div>{% endif %}
+        </div></div>
     </nav>
-
     <div class="py-10">
-        <header>
-            <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                {% block header %}{% endblock %}
-            </div>
-        </header>
-        <main>
-            <div class="mx-auto max-w-7xl sm:px-6 lg:px-8">
-                 {% with messages = get_flashed_messages(with_categories=true) %}
-                  {% if messages %}{% for category, message in messages %}<div class="my-4 rounded-md p-4 {{ 'bg-red-100 text-red-800' if category == 'danger' else 'bg-blue-100 text-blue-800' }}"><p>{{ message }}</p></div>{% endfor %}{% endif %}
-                {% endwith %}
-                {% block content %}{% endblock %}
-            </div>
-        </main>
+        <header><div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">{% block header %}{% endblock %}</div></header>
+        <main><div class="mx-auto max-w-7xl sm:px-6 lg:px-8">
+             {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}{% for category, message in messages %}<div class="my-4 rounded-md p-4 {{ 'bg-red-100 text-red-800' if category == 'danger' else 'bg-blue-100 text-blue-800' }}"><p>{{ message }}</p></div>{% endfor %}{% endif %}{% endwith %}
+            {% block content %}{% endblock %}
+        </div></main>
     </div>
 </div>
 </body>

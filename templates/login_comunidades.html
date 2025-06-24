@@ -2,17 +2,13 @@
 {% block title %}Login{% endblock %}
 {% block content %}
 <div class="flex min-h-full flex-col justify-center py-12 sm:px-6 lg:px-8">
-  <div class="sm:mx-auto sm:w-full sm:max-w-md">
-    <h2 class="mt-6 text-center text-3xl font-bold tracking-tight text-gray-900">Aceder ao Painel</h2>
-  </div>
-  <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-    <div class="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
+  <div class="sm:mx-auto sm:w-full sm:max-w-md"><h2 class="mt-6 text-center text-3xl font-bold tracking-tight text-gray-900">Aceder ao Painel</h2></div>
+  <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md"><div class="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
       <form class="space-y-6" action="{{ url_for('login') }}" method="POST">
         <div><label for="username" class="block text-sm font-medium leading-6 text-gray-900">Utilizador</label><div class="mt-2"><input id="username" name="username" type="text" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300"></div></div>
         <div><label for="password" class="block text-sm font-medium leading-6 text-gray-900">Senha</label><div class="mt-2"><input id="password" name="password" type="password" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300"></div></div>
         <div><button type="submit" class="flex w-full justify-center rounded-md bg-indigo-600 py-2 px-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Entrar</button></div>
       </form>
-    </div>
-  </div>
+  </div></div>
 </div>
 {% endblock %}
