@@ -24,13 +24,11 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'uma_chave_super_secreta_e_longa'
 
 # --- LÓGICA DO BANCO DE DADOS (POSTGRESQL) ---
 def get_db_connection():
-    """Conecta-se à base de dados externa PostgreSQL na Render."""
     up.uses_netloc.append("postgres")
     url = up.urlparse(DATABASE_URL)
     return psycopg2.connect(database=url.path[1:], user=url.username, password=url.password, host=url.hostname, port=url.port)
 
 def init_db():
-    """Cria as tabelas na base de dados externa se não existirem."""
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DROP TABLE IF EXISTS vendas, assinaturas, produtos, passes, users, admin, configuracoes CASCADE;")
@@ -45,7 +43,7 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-    print("Tabelas do banco de dados (re)criadas com sucesso, incluindo 'configuracoes'.")
+    print("Tabelas do banco de dados (re)criadas com sucesso.")
 
 def get_or_register_user(user: types.User):
     conn = get_db_connection()
@@ -59,7 +57,6 @@ def get_or_register_user(user: types.User):
     conn.close()
 
 def get_payment_config():
-    """Busca as configurações de pagamento da base de dados."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cur.execute("SELECT * FROM configuracoes WHERE id = 1")
@@ -323,6 +320,8 @@ def configuracoes():
             cur.execute("UPDATE configuracoes SET mercadopago_token = %s WHERE id = 1", (token,))
             conn.commit()
             flash('Configurações de pagamento guardadas com sucesso!', 'success')
+        cur.close()
+        conn.close()
         return redirect(url_for('configuracoes'))
     
     cur.execute("SELECT * FROM configuracoes WHERE id = 1")
