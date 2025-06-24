@@ -436,7 +436,6 @@ def gerar_cobranca_passe(call: types.CallbackQuery, pass_id: int):
 
 # --- INICIALIZAÇÃO FINAL ---
 if os.getenv('IS_RENDER'):
-    # Na Render, não chamamos init_db() automaticamente para não apagar os dados.
-    # A inicialização é feita pela rota secreta.
+    # Na Render, a inicialização é feita pela rota secreta.
     if bot and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
