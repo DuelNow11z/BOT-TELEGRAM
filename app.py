@@ -439,3 +439,4 @@ if os.getenv('IS_RENDER'):
     # Na Render, a inicialização é feita pela rota secreta.
     if bot and BASE_URL:
         bot.set_webhook(url=f"{BASE_URL}/{API_TOKEN}")
+
